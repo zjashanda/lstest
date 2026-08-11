@@ -1,0 +1,4 @@
+interface:
+  display_name: "ListenAI 测试基础框架"
+  short_description: "动态串口设备初始化、日志证据与可复用压测运行时框架"
+  default_prompt: "使用 $lstest 为设备测试建立动态串口、日志证据和安全压测运行时。"

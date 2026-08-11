@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "profile_id": "example-device",
+  "ports": [
+    {
+      "role": "csk",
+      "capabilities": ["offline_wake", "offline_asr", "player"]
+    },
+    {
+      "role": "upper",
+      "capabilities": ["online_asr", "online_nlp", "tts"]
+    }
+  ],
+  "initialization_patterns": ["algo\\s+ready"],
+  "restart_patterns": ["unexpected\\s+reboot"],
+  "commands": [],
+  "correlation": {
+    "id": "project-defined",
+    "fields": ["queryId", "requestId", "traceId"]
+  },
+  "player_markers": {},
+  "observations": {
+    "wakeup": {"patterns": [], "final_patterns": []},
+    "offline_asr": {"patterns": [], "fields": ["keyword", "intent"]},
+    "online": {"patterns": [], "result_fields": []}
+  }
+}
