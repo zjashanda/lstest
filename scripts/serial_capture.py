@@ -72,9 +72,8 @@ class SerialManager:
     def _reader(self, spec: PortSpec) -> None:
         role = spec.role or "unknown"
         path = self.artifacts.run_dir / "serial_logs" / f"serial_{spec.port}_{role}.log"
-        binary_path = self.artifacts.run_dir / "serial_logs" / f"serial_{spec.port}_{role}.bin"
         try:
-            with path.open("a", encoding="utf-8") as log, binary_path.open("ab") as binary:
+            with path.open("a", encoding="utf-8") as log:
                 while not self.stop_event.is_set():
                     try:
                         raw = self.handles[spec.port].readline()
@@ -91,8 +90,6 @@ class SerialManager:
                         continue
                     if not raw:
                         continue
-                    binary.write(raw)
-                    binary.flush()
                     text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
                     self.cursors[spec.port] += 1
                     timestamp = now_iso()

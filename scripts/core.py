@@ -24,6 +24,7 @@ STICKY_FATAL_MARKERS = {
     "PANIC", "CRASH", "ASSERT", "WATCHDOG_RESET", "UNEXPECTED_REBOOT",
     "DATA_CORRUPTION", "SERIAL_LOSS", "TOOL_EXCEPTION",
 }
+NORMAL_CASE_STATUSES = {"PASS", "EXPECTED"}
 
 
 def now_dt() -> datetime:
@@ -79,6 +80,7 @@ class ConnectionSpec:
         return {
             "ports": [item.to_dict() for item in self.ports],
             "playback_device_key": self.playback_device_key,
+            "playback_target_mode": "specified_device_key" if self.playback_device_key else "system_default_render",
             "capture_device_key": self.capture_device_key,
             "profile_id": self.profile_id,
             "result_root": str(self.result_root),
@@ -248,6 +250,11 @@ class TaskArtifacts:
             self._writer.writeheader()
             self._csv.flush()
         self.counts: dict[str, int] = {}
+        # This task-scoped state is not owned by a round or serial connection,
+        # so device reconnects/reboots never reset the accumulated count.
+        self.exception_counts: dict[str, int] = {}
+        self.anomaly_counts: dict[str, int] = {}
+        self.completed_cases = 0
         self.sticky: list[dict[str, Any]] = []
         self.capabilities: dict[str, dict[str, Any]] = {}
         self._closers: list[tuple[str, Any]] = []
@@ -321,15 +328,64 @@ class TaskArtifacts:
     def record_case(self, result: CaseResult) -> None:
         status = result.reviewed_status or result.raw_status
         self.counts[status] = self.counts.get(status, 0) + 1
+        self.completed_cases += 1
+        if status not in NORMAL_CASE_STATUSES:
+            self.exception_counts[status] = self.exception_counts.get(status, 0) + 1
         with self._lock:
             if self._writer is not None:
                 self._writer.writerow({"case_id": result.case_id, "raw_status": result.raw_status, "reviewed_status": result.reviewed_status or "", "reason": result.reason, "facts": json.dumps(result.facts, ensure_ascii=False), "evidence": json.dumps(result.evidence, ensure_ascii=False)})
             if self._csv is not None:
                 self._csv.flush()
         self.emit("CASE_RESULT", message=f"用例 {result.case_id}: {status}；{result.reason}".rstrip("；"), case=result.to_dict())
+        self._record_round_exception_summary(result.case_id, status)
+
+    def _record_round_exception_summary(self, case_id: str, status: str) -> None:
+        """Print and persist the cumulative, task-level exception snapshot."""
+        snapshot = {
+            "completed_cases": self.completed_cases,
+            "current_case_id": case_id,
+            "current_status": status,
+            "exception_counts": dict(sorted(self.exception_counts.items())),
+            "exception_total": sum(self.exception_counts.values()),
+            "anomaly_counts": dict(sorted(self.anomaly_counts.items())),
+            "anomaly_total": sum(self.anomaly_counts.values()),
+            "sticky_counts": self._sticky_counts(),
+        }
+        message = (
+            f"[EXCEPTION_SUMMARY] round={self.completed_cases} "
+            f"current={case_id}:{status} "
+            f"cumulative={json.dumps(snapshot['exception_counts'], ensure_ascii=False)} "
+            f"total={snapshot['exception_total']} "
+            f"anomalies={json.dumps(snapshot['anomaly_counts'], ensure_ascii=False)} "
+            f"anomaly_total={snapshot['anomaly_total']} "
+            f"sticky={json.dumps(snapshot['sticky_counts'], ensure_ascii=False)}"
+        )
+        self.emit("ROUND_EXCEPTION_SUMMARY", message=message, **snapshot)
+        # One blank line separates adjacent rounds in the human-readable tool log.
+        self.write_tool_log(
+            "exception_summary.log",
+            f"{now_human()} {message}\n{json.dumps(snapshot, ensure_ascii=False, sort_keys=True)}\n\n",
+        )
+
+    def _sticky_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for item in self.sticky:
+            code = str(item.get("code") or "UNKNOWN")
+            counts[code] = counts.get(code, 0) + 1
+        return dict(sorted(counts.items()))
 
     def update_progress(self, *, completed: int, target: int | None = None, **fields: Any) -> None:
-        payload = {"updated_at": now_iso(), "completed": completed, "target": target, **fields}
+        payload = {
+            "updated_at": now_iso(),
+            "completed": completed,
+            "target": target,
+            "exception_counts": dict(sorted(self.exception_counts.items())),
+            "exception_total": sum(self.exception_counts.values()),
+            "anomaly_counts": dict(sorted(self.anomaly_counts.items())),
+            "anomaly_total": sum(self.anomaly_counts.values()),
+            "sticky_counts": self._sticky_counts(),
+            **fields,
+        }
         atomic_json(self.progress_path, payload)
 
     def set_capability(self, name: str, status: str, reason: str = "", **fields: Any) -> None:
@@ -340,6 +396,20 @@ class TaskArtifacts:
         record = {"code": code, "message": message, "at": now_iso(), **fields}
         self.sticky.append(record)
         self.emit("STICKY_FATAL", level="ERROR", message=message, code=code, at=record["at"], **fields)
+
+    def record_anomaly(self, code: str, message: str, **fields: Any) -> dict[str, Any]:
+        """Record a recoverable task anomaly without hiding it behind a later pass."""
+        normalized_code = str(code or "UNKNOWN_ANOMALY").strip().upper() or "UNKNOWN_ANOMALY"
+        self.anomaly_counts[normalized_code] = self.anomaly_counts.get(normalized_code, 0) + 1
+        record = {
+            "code": normalized_code,
+            "message": message,
+            "at": now_iso(),
+            "count": self.anomaly_counts[normalized_code],
+            **fields,
+        }
+        self.emit("TASK_ANOMALY", level="ERROR", **record)
+        return record
 
     def register_closer(self, name: str, closer: Any) -> None:
         """登记可调用的资源关闭函数，按逆序执行且每项有界。"""
@@ -363,11 +433,29 @@ class TaskArtifacts:
         if self.sticky and final_status in {"PASS", "WARN"}:
             final_status = "FAIL"
             final_reason = f"{reason}；存在 sticky fatal: {self.sticky[-1].get('code', 'UNKNOWN')}"
-        summary = {"status": final_status, "reason": final_reason, "ended_at": now_iso(), "counts": self.counts, "capabilities": self.capabilities, "sticky_failures": self.sticky, "result_directory": str(self.run_dir)}
+        summary = {
+            "status": final_status,
+            "reason": final_reason,
+            "ended_at": now_iso(),
+            "counts": self.counts,
+            "exception_counts": dict(sorted(self.exception_counts.items())),
+            "exception_total": sum(self.exception_counts.values()),
+            "anomaly_counts": dict(sorted(self.anomaly_counts.items())),
+            "anomaly_total": sum(self.anomaly_counts.values()),
+            "sticky_counts": self._sticky_counts(),
+            "capabilities": self.capabilities,
+            "sticky_failures": self.sticky,
+            "result_directory": str(self.run_dir),
+        }
         atomic_json(self.summary_json, summary)
         self.summary_md.write_text(
             f"# lstest 任务汇总\n\n- 状态：`{final_status}`\n- 原因：{final_reason}\n"
             f"- 各状态数量：{json.dumps(self.counts, ensure_ascii=False)}\n"
+            f"- 全程累计异常：{json.dumps(summary['exception_counts'], ensure_ascii=False)}\n"
+            f"- 全程累计异常总数：{summary['exception_total']}\n"
+            f"- 全程累计异常事件：{json.dumps(summary['anomaly_counts'], ensure_ascii=False)}\n"
+            f"- 全程累计异常事件总数：{summary['anomaly_total']}\n"
+            f"- Sticky 严重异常：{json.dumps(summary['sticky_counts'], ensure_ascii=False)}\n"
             f"- 证据目录：`{self.run_dir}`\n",
             encoding="utf-8",
         )

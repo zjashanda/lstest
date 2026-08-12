@@ -2,6 +2,7 @@
 
 from .core import CaseResult, ConnectionSpec, DeviceRuntime, TaskArtifacts
 from .profile import DeviceProfile, ProfileError
+from .runtime import ScenarioRuntime
 
 __all__ = [
     "CaseResult",
@@ -10,4 +11,5 @@ __all__ = [
     "DeviceRuntime",
     "ProfileError",
     "TaskArtifacts",
+    "ScenarioRuntime",
 ]

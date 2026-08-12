@@ -47,12 +47,26 @@ class DeviceProfile:
             raise ProfileError("ports must be a list")
         if not isinstance(payload.get("commands", []), list):
             raise ProfileError("commands must be a list")
+        if "wake_words" in payload and not isinstance(payload["wake_words"], list):
+            raise ProfileError("wake_words must be a list")
         for item in payload.get("commands", []):
             if not isinstance(item, Mapping) or not str(item.get("command", "")).strip():
                 raise ProfileError("each command rule requires command")
         for field in ("correlation", "player_markers", "observations"):
             if field in payload and not isinstance(payload[field], Mapping):
                 raise ProfileError(f"{field} must be an object")
+        wake_word_ids: set[str] = set()
+        for item in payload.get("wake_words", []):
+            if not isinstance(item, Mapping):
+                raise ProfileError("each wake_words item must be an object")
+            wake_word_id = str(item.get("wake_word_id") or "").strip()
+            spoken_text = str(item.get("spoken_text") or "").strip()
+            expected_raw = item.get("expected_raw")
+            if not wake_word_id or not spoken_text or not isinstance(expected_raw, Mapping) or not expected_raw:
+                raise ProfileError("each wake_words item requires wake_word_id, spoken_text, and expected_raw")
+            if wake_word_id in wake_word_ids:
+                raise ProfileError(f"duplicate wake_word_id: {wake_word_id}")
+            wake_word_ids.add(wake_word_id)
         return cls(profile_id, schema_version, path, payload, sha256_file(path))
 
     @property
@@ -81,6 +95,11 @@ class DeviceProfile:
     def observations(self) -> Mapping[str, Any]:
         value = self.payload.get("observations", {})
         return value if isinstance(value, Mapping) else {}
+
+    @property
+    def wake_words(self) -> list[Mapping[str, Any]]:
+        """Ordered wakeword requirements; each test must select one entry explicitly."""
+        return [dict(item) for item in self.payload.get("wake_words", []) if isinstance(item, Mapping)]
 
     def observation_rules(self, category: str) -> Mapping[str, Any]:
         value = self.observations.get(category, {})

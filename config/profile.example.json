@@ -18,6 +18,18 @@
     "id": "project-defined",
     "fields": ["queryId", "requestId", "traceId"]
   },
+  "wake_words": [
+    {
+      "wake_word_id": "default-xiao-ti",
+      "spoken_text": "小T小T",
+      "expected_raw": {"keyword": "xiao ti xiao ti"}
+    },
+    {
+      "wake_word_id": "alternate-hey-tcl",
+      "spoken_text": "嘿TCL",
+      "expected_raw": {"keyword": "hey tcl"}
+    }
+  ],
   "player_markers": {},
   "observations": {
     "wakeup": {"patterns": [], "final_patterns": []},
