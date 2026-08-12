@@ -23,6 +23,14 @@ playback = runtime.play(
     case_id=case_id,
     expected_recognition={"keyword": "ni3 hao3 kong1 tiao2", "intent": "ni3 hao3 kong1 tiao2"},
 )
+runtime.record_player_marker(
+    marker,
+    case_id=case_id,
+    broadcast_id=playback["broadcast_id"],
+    port=event.port,
+    raw_line=event.line,
+    evidence_refs=("serial_logs/serial_COM11_player.log#120",),
+)
 runtime.wait_observation_window(
     timeout_s,
     fetch=read_events,
@@ -36,6 +44,10 @@ evidence_path, evidence_sha256 = runtime.write_evidence(
 timing_path = runtime.append_jsonl("online_timing.jsonl", timing_payload)
 runtime.record_case(row)
 ```
+
+`runtime.play` 会创建唯一 `broadcast_id`，并将主机播放器请求、进程启动、结束、失败、超时或阻塞写入 `tool_logs/player_lifecycle.jsonl`。主机进程正常返回不等于设备已经播放；适配层必须把项目设备侧播放器 marker 调用 `record_player_marker` 原样记录，才可佐证设备 `START`/`END`。设备 `ERROR` marker、主机失败、超时或阻塞均记录任务异常并使当前通过轮失败。
+
+项目启动持续串口采集后必须调用 `device_runtime.recover_initialization(serial_manager)`，它会等待设备初始化完成、恢复并验证 profile 的 `safe_init` 命令，再自动开始重启监控。每轮/每个用例开始前调用 `device_runtime.check_ready()`；返回非空原因时停止新动作并以该原因收尾，避免在重启恢复失败后继续产生无日志结果。
 
 适配层对每一条最终识别结果必须调用 `record_recognition`，先落原始值再关联播报。离线算法输出如 `keyword: ni3 hao3 kong1 tiao2`、`intent: ni3 hao3 kong1 tiao2` 必须原样传入 `raw_values`；转换后的中文或业务值仅放在 `normalized`。播放时使用 `expected_recognition` 声明当前播报语料期望的原始识别字段，数量正确但字段值不一致记 `RECOGNITION_RESULT_MISMATCH`。未关联播报的结果记 `UNEXPECTED_RECOGNITION`，单次播报的第二条及之后结果记 `MULTIPLE_RECOGNITIONS_FOR_PLAYBACK`，三者均使该轮原本的 `PASS`/`EXPECTED` 自动升级为 `FAIL`。
 

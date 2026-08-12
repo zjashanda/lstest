@@ -52,9 +52,35 @@ class DeviceProfile:
         for item in payload.get("commands", []):
             if not isinstance(item, Mapping) or not str(item.get("command", "")).strip():
                 raise ProfileError("each command rule requires command")
-        for field in ("correlation", "player_markers", "observations"):
+            for name in ("success_patterns", "evidence_patterns"):
+                if name in item and not isinstance(item[name], list):
+                    raise ProfileError(f"command {name} must be a list")
+            for name in ("retries",):
+                if name in item and (not isinstance(item[name], int) or item[name] < 0):
+                    raise ProfileError(f"command {name} must be a non-negative integer")
+            for name in ("timeout_s", "evidence_timeout_s", "retry_delay_s"):
+                if name in item:
+                    try:
+                        if float(item[name]) <= 0:
+                            raise ValueError
+                    except (TypeError, ValueError) as error:
+                        raise ProfileError(f"command {name} must be positive") from error
+            if item.get("safe_init", True) and not item.get("success_patterns") and not item.get("evidence_patterns"):
+                raise ProfileError("safe initialization command requires success_patterns or evidence_patterns")
+        for field in ("correlation", "player_markers", "observations", "recovery"):
             if field in payload and not isinstance(payload[field], Mapping):
                 raise ProfileError(f"{field} must be an object")
+        recovery = payload.get("recovery", {})
+        if isinstance(recovery, Mapping):
+            if "stop_on_failure" in recovery and not isinstance(recovery["stop_on_failure"], bool):
+                raise ProfileError("recovery stop_on_failure must be boolean")
+            for name in ("initialization_timeout_s", "restart_poll_interval_s"):
+                if name in recovery:
+                    try:
+                        if float(recovery[name]) <= 0:
+                            raise ValueError
+                    except (TypeError, ValueError) as error:
+                        raise ProfileError(f"recovery {name} must be positive") from error
         wake_word_ids: set[str] = set()
         for item in payload.get("wake_words", []):
             if not isinstance(item, Mapping):
@@ -94,6 +120,11 @@ class DeviceProfile:
     @property
     def observations(self) -> Mapping[str, Any]:
         value = self.payload.get("observations", {})
+        return value if isinstance(value, Mapping) else {}
+
+    @property
+    def recovery(self) -> Mapping[str, Any]:
+        value = self.payload.get("recovery", {})
         return value if isinstance(value, Mapping) else {}
 
     @property

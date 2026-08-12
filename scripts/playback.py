@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .core import TaskArtifacts
+    from .core import TaskArtifacts, now_iso
 except ImportError:  # direct execution fallback
-    from core import TaskArtifacts
+    from core import TaskArtifacts, now_iso
 
 
 class PlaybackBackend:
@@ -21,7 +21,8 @@ class PlaybackBackend:
         self.script = script or Path(__file__).with_name("listenai_play.py")
         self.normalizer = PlayerEventNormalizer()
         self.lifecycle: list[dict[str, Any]] = []
-        self._lifecycle_times: dict[str, float] = {}
+        self._lifecycle_times: dict[tuple[str, str], float] = {}
+        self.last_playback: dict[str, Any] = {}
 
     @property
     def target_label(self) -> str:
@@ -44,86 +45,243 @@ class PlaybackBackend:
             command.extend(["--device-key", self.device_key])
         return command
 
+    def _record_lifecycle(
+        self,
+        lifecycle_status: str,
+        *,
+        event: str,
+        message: str,
+        level: str = "INFO",
+        case_id: str = "",
+        broadcast_id: str = "",
+        audio: Path | None = None,
+        source: str = "host_player",
+        **fields: Any,
+    ) -> dict[str, Any]:
+        """Persist one player state without claiming device-side playback."""
+        record = {
+            "at": now_iso(),
+            "event": event,
+            "level": level,
+            "message": message,
+            "lifecycle_status": lifecycle_status,
+            "source": source,
+            "case_id": case_id,
+            "broadcast_id": broadcast_id,
+            "audio": str(audio) if audio is not None else "",
+            "playback_target": self.target_label,
+            "playback_target_mode": self.target_mode,
+            "player_script": str(self.script),
+            **fields,
+        }
+        lifecycle_log = self.artifacts.run_dir / "tool_logs" / "player_lifecycle.jsonl"
+        record["lifecycle_log"] = str(lifecycle_log)
+        self.artifacts.append_tool_jsonl("player_lifecycle.jsonl", record)
+        self.artifacts.emit(
+            event,
+            level=level,
+            message=message,
+            task_log=True,
+            lifecycle_event=event,
+            **{
+                key: value
+                for key, value in record.items()
+                if key not in {"event", "level", "message"}
+            },
+        )
+        return record
+
+    @staticmethod
+    def _timeout_output(error: subprocess.TimeoutExpired) -> str:
+        """Keep partial child output as evidence when a bounded wait expires."""
+        values = [getattr(error, "stdout", None), getattr(error, "stderr", None)]
+        output = "".join(str(item) for item in values if item)
+        return output or str(error)
+
     def probe(self) -> bool:
         if not self.script.is_file():
-            self.artifacts.emit("PLAYER_BLOCKED", level="ERROR", message="播放工具不存在。", task_log=True, script=str(self.script))
+            self._record_lifecycle(
+                "BLOCKED", event="PLAYER_BLOCKED", level="ERROR", message="播放工具不存在。",
+                reason="player_script_missing", tool_status="BLOCKED",
+            )
             return False
+        started = time.monotonic()
+        self._record_lifecycle(
+            "PROBE_REQUESTED", event="PLAYER_PROBE_REQUESTED", message="请求探测播放设备。",
+            timeout_s=30.0, tool_status="PENDING",
+        )
         try:
             completed = subprocess.run(
                 self._player_command("probe"), capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=30, check=False,
             )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            self.artifacts.emit("PLAYER_PROBE_FAIL", level="ERROR", message=f"播放器探测失败: {error}", task_log=True)
+        except subprocess.TimeoutExpired as error:
+            duration_s = round(time.monotonic() - started, 3)
+            tool_log = self.artifacts.write_tool_log("player_probe.log", self._timeout_output(error))
+            self._record_lifecycle(
+                "PROBE_TIMEOUT", event="PLAYER_PROBE_TIMEOUT", level="ERROR",
+                message=f"播放器探测超时，已等待 {duration_s:.3f}s。", timeout_s=30.0,
+                duration_s=duration_s, evidence=str(tool_log), tool_status="FAIL",
+            )
+            return False
+        except OSError as error:
+            self._record_lifecycle(
+                "PROBE_ERROR", event="PLAYER_PROBE_FAIL", level="ERROR", message=f"播放器探测失败: {error}",
+                error=f"{type(error).__name__}: {error}", tool_status="FAIL",
+            )
             return False
         ok = completed.returncode == 0
         output = completed.stdout or completed.stderr or ""
         tool_log = self.artifacts.write_tool_log("player_probe.log", output)
-        self.artifacts.emit(
-            "PLAYER_PROBE",
+        duration_s = round(time.monotonic() - started, 3)
+        self._record_lifecycle(
+            "PROBE_COMPLETED" if ok else "PROBE_FAILED",
+            event="PLAYER_PROBE",
+            level="INFO" if ok else "ERROR",
             message=f"播放器探测{'通过' if ok else '失败'}。",
-            task_log=True,
             returncode=completed.returncode,
-            playback_target=self.target_label,
-            playback_target_mode=self.target_mode,
             tool_output=output[-500:],
             evidence=str(tool_log),
+            duration_s=duration_s,
             tool_status="PASS" if ok else "FAIL",
         )
         return ok
 
-    def play(self, audio: Path, *, case_id: str = "", timeout: float = 120.0) -> bool:
+    def play(
+        self,
+        audio: Path,
+        *,
+        case_id: str = "",
+        broadcast_id: str = "",
+        timeout: float = 120.0,
+    ) -> bool:
+        """Run the host player and record host/device evidence separately."""
+        self.last_playback = {
+            "status": "UNKNOWN",
+            "case_id": case_id,
+            "broadcast_id": broadcast_id,
+            "audio": str(audio),
+        }
         if not self.script.is_file():
+            self.last_playback.update({"status": "BLOCKED", "reason": "player_script_missing"})
+            self._record_lifecycle(
+                "BLOCKED", event="PLAYER_BLOCKED", level="ERROR", message="播放工具不存在。",
+                case_id=case_id, broadcast_id=broadcast_id, audio=audio,
+                reason="player_script_missing", tool_status="BLOCKED",
+            )
             return False
         started = time.monotonic()
-        self.artifacts.emit(
-            "PLAYER_REQUEST", message=f"请求播放音频: {audio.name}。", task_log=True,
-            case_id=case_id, audio=str(audio), playback_target=self.target_label,
-            playback_target_mode=self.target_mode,
+        timeout_s = max(0.1, float(timeout))
+        self._record_lifecycle(
+            "REQUESTED", event="PLAYER_REQUESTED", message=f"请求播放音频: {audio.name}。",
+            case_id=case_id, broadcast_id=broadcast_id, audio=audio, timeout_s=timeout_s,
+            tool_status="PENDING", device_playback_status="UNVERIFIED",
         )
-        self.artifacts.emit("HOST_AUDIO_START", message=f"开始播放音频: {audio.name}。", task_log=True, case_id=case_id, audio=str(audio), monotonic_start=started)
+        self._record_lifecycle(
+            "PROCESS_STARTED", event="HOST_AUDIO_START",
+            message=f"主机播放器进程已启动: {audio.name}；尚未证明设备侧播放。",
+            case_id=case_id, broadcast_id=broadcast_id, audio=audio, timeout_s=timeout_s,
+            monotonic_start=started, tool_status="RUNNING", device_playback_status="UNVERIFIED",
+        )
         try:
             completed = subprocess.run(
                 self._player_command("play", audio=audio), capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=max(0.1, float(timeout)), check=False,
+                encoding="utf-8", errors="replace", timeout=timeout_s, check=False,
             )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            self.artifacts.emit("HOST_AUDIO_ERROR", level="ERROR", message=f"主机播放失败: {error}", task_log=True, case_id=case_id)
+        except subprocess.TimeoutExpired as error:
+            duration_s = round(time.monotonic() - started, 3)
+            tool_log = self.artifacts.write_tool_log(
+                f"play_{case_id or audio.stem}.log", self._timeout_output(error),
+            )
+            self.last_playback.update({
+                "status": "TIMEOUT", "reason": "player_process_timeout", "duration_s": duration_s,
+                "evidence": str(tool_log),
+            })
+            self._record_lifecycle(
+                "TIMEOUT", event="HOST_AUDIO_TIMEOUT", level="ERROR",
+                message=f"主机播放器超时，已等待 {duration_s:.3f}s。",
+                case_id=case_id, broadcast_id=broadcast_id, audio=audio, timeout_s=timeout_s,
+                duration_s=duration_s, evidence=str(tool_log), tool_status="FAIL",
+                device_playback_status="UNVERIFIED", error=f"{type(error).__name__}: {error}",
+            )
+            return False
+        except OSError as error:
+            self.last_playback.update({"status": "ERROR", "reason": "player_process_error", "error": str(error)})
+            self._record_lifecycle(
+                "ERROR", event="HOST_AUDIO_ERROR", level="ERROR", message=f"主机播放失败: {error}",
+                case_id=case_id, broadcast_id=broadcast_id, audio=audio,
+                tool_status="FAIL", device_playback_status="UNVERIFIED", error=f"{type(error).__name__}: {error}",
+            )
             return False
         ended = time.monotonic()
         output = (completed.stdout or "") + (completed.stderr or "")
         tool_log = self.artifacts.write_tool_log(f"play_{case_id or audio.stem}.log", output)
         duration_s = round(ended - started, 3)
-        self.artifacts.emit(
-            "HOST_AUDIO_END",
-            message=f"音频播放结束，耗时 {duration_s:.3f}s。",
-            task_log=True,
-            case_id=case_id,
-            returncode=completed.returncode,
-            duration_s=duration_s,
-            evidence=str(tool_log),
-            tool_status="PASS" if completed.returncode == 0 else "FAIL",
+        ok = completed.returncode == 0
+        self.last_playback.update({
+            "status": "COMPLETED" if ok else "FAILED",
+            "reason": "host_player_completed" if ok else "player_returncode_nonzero",
+            "returncode": completed.returncode,
+            "duration_s": duration_s,
+            "evidence": str(tool_log),
+        })
+        self._record_lifecycle(
+            "COMPLETED" if ok else "FAILED", event="HOST_AUDIO_END",
+            level="INFO" if ok else "ERROR",
+            message=(
+                f"主机播放器进程正常返回，耗时 {duration_s:.3f}s；设备侧播放仍需 marker 佐证。"
+                if ok else f"主机播放器返回失败，退出码 {completed.returncode}。"
+            ),
+            case_id=case_id, broadcast_id=broadcast_id, audio=audio,
+            returncode=completed.returncode, duration_s=duration_s, evidence=str(tool_log),
+            tool_status="PASS" if ok else "FAIL", device_playback_status="UNVERIFIED",
+            tool_output=output[-500:],
         )
-        return completed.returncode == 0
+        return ok
 
-    def observe_marker(self, marker: str, *, case_id: str = "", port: str | None = None, raw_line: str = "") -> dict[str, Any]:
+    def observe_marker(
+        self,
+        marker: str,
+        *,
+        case_id: str = "",
+        broadcast_id: str = "",
+        audio: Path | None = None,
+        port: str | None = None,
+        raw_line: str = "",
+        evidence_refs: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
         """记录项目原始播放器 marker，并附加公共生命周期状态。"""
         observed_at = time.monotonic()
         normalized = self.normalizer.observe(marker)
-        record = {**normalized, "case_id": case_id, "port": port, "raw_line": raw_line, "monotonic_seconds": observed_at}
+        record = {
+            **normalized,
+            "case_id": case_id,
+            "broadcast_id": broadcast_id,
+            "audio": str(audio) if audio is not None else "",
+            "port": port,
+            "raw_line": raw_line,
+            "monotonic_seconds": observed_at,
+            "evidence_refs": list(evidence_refs),
+        }
         self.lifecycle.append(record)
         state = normalized.get("player_state")
+        context = broadcast_id or case_id or "unassociated"
         if state in {"START", "PREPARED", "REQUEST"}:
-            self._lifecycle_times.setdefault(str(state), observed_at)
-        if state == "END" and "START" in self._lifecycle_times:
-            record["duration_ms"] = round((observed_at - self._lifecycle_times["START"]) * 1000)
+            self._lifecycle_times.setdefault((context, str(state)), observed_at)
+        if state == "END" and (context, "START") in self._lifecycle_times:
+            record["duration_ms"] = round((observed_at - self._lifecycle_times[(context, "START")]) * 1000)
+        if state == "ERROR":
+            record["tool_status"] = "FAIL"
         level = "ERROR" if state == "ERROR" else ("INFO" if state else "WARN")
-        self.artifacts.emit(
-            "PLAYER_LIFECYCLE", level=level,
+        lifecycle = self._record_lifecycle(
+            f"DEVICE_{state}" if state else "DEVICE_UNKNOWN_MARKER",
+            event="PLAYER_LIFECYCLE", level=level,
             message=f"播放器 marker: {marker}；state={state or 'UNKNOWN'}。",
-            task_log=True, **record,
+            source="device_marker",
+            device_playback_status=("FAILED" if state == "ERROR" else ("OBSERVED" if state else "UNKNOWN")),
+            **record,
         )
-        return record
+        return {**record, "lifecycle_log": lifecycle["lifecycle_log"]}
 
 
 class CaptureBackend:

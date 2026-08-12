@@ -141,6 +141,7 @@ class ScenarioRuntime:
         self.artifacts = artifacts
         self.player = PlaybackBackend(artifacts, playback_device_key, playback_script)
         self.broadcast_tracker = BroadcastRecognitionTracker()
+        self._next_broadcast_index = 0
         self._recognition_associations: dict[str, list[dict[str, Any]]] = {}
         self.wake_word_sequence = WakeWordSequence.from_items(wake_words)
 
@@ -171,7 +172,8 @@ class ScenarioRuntime:
         timeout: float = 120.0,
     ) -> dict[str, Any]:
         """播放音频，并建立与期望原始识别字段一一对应的播报窗口。"""
-        broadcast_id = f"broadcast-{len(self.broadcast_tracker.broadcasts) + 1:06d}"
+        self._next_broadcast_index += 1
+        broadcast_id = f"broadcast-{self._next_broadcast_index:06d}"
         audio_sha256 = sha256_file(audio_file) if audio_file.is_file() else ""
         broadcast = self.broadcast_tracker.begin_broadcast(
             broadcast_id,
@@ -184,17 +186,37 @@ class ScenarioRuntime:
             "BROADCAST_STARTED", message=f"播报窗口 {broadcast_id} 已建立。", task_log=True, **broadcast,
         )
         try:
-            ok = self.player.play(audio_file, case_id=case_id, timeout=timeout)
+            ok = self.player.play(audio_file, case_id=case_id, broadcast_id=broadcast_id, timeout=timeout)
         except Exception as error:
             self.broadcast_tracker.discard_broadcast(broadcast_id)
+            playback = dict(self.player.last_playback)
+            anomaly = self.artifacts.record_anomaly(
+                "PLAYER_PLAYBACK_EXCEPTION",
+                f"播报窗口 {broadcast_id} 的主机播放器发生未处理异常。",
+                case_id=case_id,
+                broadcast_id=broadcast_id,
+                audio_file=str(audio_file),
+                playback=playback,
+                error=f"{type(error).__name__}: {error}",
+            )
+            if case_id:
+                self._recognition_associations.setdefault(case_id, []).append({
+                    "status": "FAIL",
+                    "reason": anomaly["code"],
+                    "broadcast_id": broadcast_id,
+                    "playback": playback,
+                })
             self.artifacts.emit(
                 "BROADCAST_FAILED", level="ERROR", message=f"播报窗口 {broadcast_id} 未成功播放。",
-                task_log=True, case_id=case_id, error=f"{type(error).__name__}: {error}",
+                task_log=True, case_id=case_id, broadcast_id=broadcast_id,
+                error=f"{type(error).__name__}: {error}", playback=playback,
             )
             return {
                 "returncode": 1,
                 "error": f"{type(error).__name__}: {error}",
                 "audio_file": str(audio_file),
+                "broadcast_id": broadcast_id,
+                "playback": playback,
             }
         result: dict[str, Any] = {
             "returncode": 0 if ok else 1,
@@ -204,12 +226,82 @@ class ScenarioRuntime:
         }
         if not ok:
             self.broadcast_tracker.discard_broadcast(broadcast_id)
+            playback = dict(self.player.last_playback)
+            code = {
+                "TIMEOUT": "PLAYER_PLAYBACK_TIMEOUT",
+                "BLOCKED": "PLAYER_PLAYBACK_BLOCKED",
+            }.get(str(playback.get("status") or ""), "PLAYER_PLAYBACK_FAILED")
+            anomaly = self.artifacts.record_anomaly(
+                code,
+                f"播报窗口 {broadcast_id} 的主机播放器未成功完成。",
+                case_id=case_id,
+                broadcast_id=broadcast_id,
+                audio_file=str(audio_file),
+                playback=playback,
+            )
+            if case_id:
+                self._recognition_associations.setdefault(case_id, []).append({
+                    "status": "FAIL",
+                    "reason": anomaly["code"],
+                    "broadcast_id": broadcast_id,
+                    "playback": playback,
+                })
             self.artifacts.emit(
                 "BROADCAST_FAILED", level="ERROR", message=f"播报窗口 {broadcast_id} 未成功播放。",
-                task_log=True, case_id=case_id, error="playback_failed",
+                task_log=True, case_id=case_id, broadcast_id=broadcast_id, error="playback_failed", playback=playback,
             )
             result["error"] = "playback_failed"
+            result["playback"] = playback
         return result
+
+    def record_player_marker(
+        self,
+        marker: str,
+        *,
+        case_id: str = "",
+        broadcast_id: str | None = None,
+        port: str | None = None,
+        raw_line: str = "",
+        evidence_refs: Iterable[str] = (),
+    ) -> dict[str, Any]:
+        """Record a project player marker and make device-side errors actionable.
+
+        A successful host-player process only means the request was submitted.
+        Project adapters call this method for serial/device player markers to
+        prove device-side start/end or retain the exact marker on failure.
+        """
+        refs = tuple(str(item) for item in evidence_refs)
+        broadcast = self.broadcast_tracker.broadcasts.get(str(broadcast_id or ""), {})
+        audio_file = Path(str(broadcast["audio_file"])) if broadcast.get("audio_file") else None
+        record = self.player.observe_marker(
+            marker,
+            case_id=case_id,
+            broadcast_id=str(broadcast_id or ""),
+            audio=audio_file,
+            port=port,
+            raw_line=raw_line,
+            evidence_refs=refs,
+        )
+        if record.get("player_state") == "ERROR":
+            anomaly = self.artifacts.record_anomaly(
+                "PLAYER_DEVICE_MARKER_ERROR",
+                f"设备侧播放器返回异常 marker: {marker}。",
+                case_id=case_id,
+                broadcast_id=str(broadcast_id or ""),
+                marker=marker,
+                port=port or "",
+                raw_line=raw_line,
+                evidence_refs=list(refs),
+            )
+            if case_id:
+                self._recognition_associations.setdefault(case_id, []).append({
+                    "status": "FAIL",
+                    "reason": anomaly["code"],
+                    "broadcast_id": str(broadcast_id or ""),
+                    "player_marker": marker,
+                })
+            record["anomaly_code"] = anomaly["code"]
+        return record
 
     def observe_recognition(
         self,

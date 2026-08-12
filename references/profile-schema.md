@@ -8,7 +8,14 @@
 
 播放声卡为可选运行时参数 `playback_device_key`：未配置时使用电脑当前默认 Render 声卡；配置稳定 key 时严格绑定该声卡，key 不存在、重复或不可用时立即失败，绝不改用默认声卡。
 
-`commands` 每项应包含 `command`、`roles`、`phase`、`timeout_s`、`success_patterns`、`ack_strength`。未列出的命令、换行、命令串联和错误端口必须拒绝。
+`commands` 是项目命令白名单。初始化恢复命令设置 `safe_init: true`（默认值）；非初始化命令必须显式设置 `safe_init: false`。每条初始化恢复命令必须配置至少一种可审计验证规则：
+
+- `success_patterns`：命令直接返回内容或发送后串口新出现的成功回执必须匹配。直接返回了非空内容但不匹配时，该次尝试失败，不能用旁证覆盖错误回执。
+- `evidence_patterns`：仅当没有任何直接/串口回执时允许使用的初始化后旁证，例如设备日志等级查询结果、模块就绪状态或业务日志。旁证必须在该次命令发送后的新串口事件中匹配。
+- `retries`：失败后的重试次数，默认 `1`，即最多两次发送。
+- `timeout_s`、`evidence_timeout_s`、`retry_delay_s`：分别控制回执等待、旁证等待和两次尝试之间的间隔，均为正秒数。
+
+恢复前必须先等 `initialization_patterns` 出现。`recovery.initialization_timeout_s` 控制这段等待，`recovery.restart_poll_interval_s` 控制运行中重启 marker 的检查频率。`recovery.stop_on_failure` 默认 `true`：重试耗尽后记录 `INITIALIZATION_RECOVERY_FAILED` 并请求安全停止，避免继续产生无法审计的无日志结果；仅明确确认可在初始化缺失时继续的项目才能设为 `false`。命令未列入白名单、换行、命令串联和错误端口必须拒绝。
 
 `correlation` 通过 `fields` 和规则 ID 描述项目原生关联字段；可以是 `queryId`、`requestId`、`traceId`、`sessionId`、消息序号或复合键。
 

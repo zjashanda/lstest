@@ -268,10 +268,21 @@ class TaskArtifacts:
         safe_name = Path(name).name
         path = self.run_dir / "tool_logs" / safe_name
         mode = "a" if append else "w"
-        with path.open(mode, encoding="utf-8", errors="replace") as handle:
-            handle.write(content)
-            if content and not content.endswith("\n"):
-                handle.write("\n")
+        with self._lock:
+            with path.open(mode, encoding="utf-8", errors="replace") as handle:
+                handle.write(content)
+                if content and not content.endswith("\n"):
+                    handle.write("\n")
+        return path
+
+    def append_tool_jsonl(self, name: str, payload: Mapping[str, Any]) -> Path:
+        """线程安全地追加一条结构化工具证据。"""
+        safe_name = Path(name).name
+        path = self.run_dir / "tool_logs" / safe_name
+        line = json.dumps(dict(payload), ensure_ascii=False, separators=(",", ":"))
+        with self._lock:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
         return path
 
     def emit(self, event: str, *, message: str = "", level: str = "INFO", task_log: bool = True, **fields: Any) -> None:
@@ -475,12 +486,78 @@ class DeviceRuntime:
         self.profile = profile
         self.artifacts = artifacts
         self.started = False
+        self.restart_recovery_monitor: Any | None = None
 
     def preflight(self) -> dict[str, Any]:
         self.artifacts.emit("PREFLIGHT", message="开始公共设备前置检查。", task_log=True, ports=self.connection.to_dict()["ports"])
         return {"ports": len(self.connection.ports), "profile": getattr(self.profile, "profile_id", None)}
 
+    def start_restart_recovery(
+        self,
+        manager: Any,
+        *,
+        initialization_timeout_s: float = 10.0,
+        poll_interval_s: float = 0.1,
+    ) -> Any:
+        """Continuously recover profile initialization after restart markers."""
+        if self.restart_recovery_monitor is not None:
+            return self.restart_recovery_monitor
+        try:
+            from .shell import ProfileRestartRecoveryMonitor
+        except ImportError:  # direct execution fallback
+            from shell import ProfileRestartRecoveryMonitor
+        monitor = ProfileRestartRecoveryMonitor(
+            self.profile,
+            self.artifacts,
+            manager,
+            initialization_timeout_s=initialization_timeout_s,
+            poll_interval_s=poll_interval_s,
+        )
+        monitor.start()
+        self.restart_recovery_monitor = monitor
+        self.started = True
+        return monitor
+
+    def recover_initialization(
+        self,
+        manager: Any,
+        *,
+        cursors: Mapping[str, int] | None = None,
+        recovery_reason: str = "startup",
+    ) -> dict[str, Any]:
+        """Verify all profile initialization commands after a completed boot.
+
+        A successful first recovery also starts background restart monitoring.
+        Commands and validation rules always come from the project profile.
+        """
+        try:
+            from .shell import ProfileRecoveryStateMachine
+        except ImportError:  # direct execution fallback
+            from shell import ProfileRecoveryStateMachine
+        recovery = self.profile.recovery if hasattr(self.profile, "recovery") else {}
+        timeout_s = max(0.1, float(recovery.get("initialization_timeout_s", 10.0)))
+        poll_interval_s = max(0.02, float(recovery.get("restart_poll_interval_s", 0.1)))
+        result = ProfileRecoveryStateMachine(self.profile, self.artifacts, manager).run(
+            timeout_s,
+            cursors=cursors,
+            recovery_reason=recovery_reason,
+        )
+        if result.get("status") == "PASS":
+            self.start_restart_recovery(
+                manager,
+                initialization_timeout_s=timeout_s,
+                poll_interval_s=poll_interval_s,
+            )
+        return result
+
+    def check_ready(self) -> str | None:
+        """Return a restart/recovery stop reason before a project starts new work."""
+        return self.artifacts.check_runtime()
+
     def close(self) -> None:
+        if self.restart_recovery_monitor is not None:
+            self.restart_recovery_monitor.stop()
+            self.restart_recovery_monitor = None
         if self.started:
             self.artifacts.emit("RUNTIME_CLOSE", message="公共运行时已收尾。", task_log=True)
             self.started = False

@@ -17,7 +17,7 @@ from lstest.scripts.playback import CaptureBackend, PlayerEventNormalizer, Playb
 from lstest.scripts.profile import DeviceProfile, ProfileError
 from lstest.scripts.runtime import ScenarioRuntime
 from lstest.scripts.serial_capture import SerialManager
-from lstest.scripts.shell import ProfileCommandSender
+from lstest.scripts.shell import ProfileCommandSender, ProfileRecoveryStateMachine, ProfileRestartRecoveryMonitor
 from lstest.scripts.timing import EventClock, correlate
 
 
@@ -42,6 +42,46 @@ class FakeSerial:
 
     def close(self):
         self.closed = True
+
+
+class RecoveryEvent:
+    def __init__(self, port: str, role: str, cursor: int, line: str):
+        self.port = port
+        self.role = role
+        self.cursor = cursor
+        self.line = line
+
+
+class RecoveryManager:
+    """Deterministic serial-event manager for recovery state-machine tests."""
+
+    def __init__(self, ports, event_batches=None, writes=None):
+        self.ports = ports
+        self.handles = {spec.port: object() for spec in ports}
+        self.stop_event = __import__("threading").Event()
+        self.events = []
+        self.event_batches = list(event_batches or [])
+        self.writes = writes if writes is not None else []
+        self.wait_calls = []
+
+    def snapshot(self, port=None):
+        if port:
+            return {port: max((event.cursor for event in self.events if event.port == port), default=0)}
+        return {spec.port: max((event.cursor for event in self.events if event.port == spec.port), default=0) for spec in self.ports}
+
+    def since(self, cursors):
+        return [event for event in self.events if event.cursor > cursors.get(event.port, 0)]
+
+    def wait_for(self, predicate, _timeout_s, *, cursors=None):
+        self.wait_calls.append(dict(cursors or {}))
+        if self.event_batches:
+            self.events.extend(self.event_batches.pop(0))
+        values = self.since(cursors or self.snapshot())
+        return values if predicate(values) else values
+
+    def write(self, command, port):
+        self.writes.append((command, port))
+        return ""
 
 
 class FoundationTests(unittest.TestCase):
@@ -368,6 +408,90 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(specified_player.target_mode, "specified_device_key")
             artifacts.finalize("PASS", "fixture complete")
 
+    def test_player_lifecycle_log_separates_host_completion_from_device_marker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "player-lifecycle")
+            runtime = ScenarioRuntime(artifacts)
+            audio = Path(directory) / "fixture.mp3"
+            audio.write_bytes(b"fixture audio")
+            runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+            broadcast = runtime.play(audio, case_id="player-case", expected_recognition={"keyword": "fixture"})
+            marker = runtime.record_player_marker(
+                "START",
+                case_id="player-case",
+                broadcast_id=broadcast["broadcast_id"],
+                port="COM9",
+                raw_line="[player] start",
+                evidence_refs=("serial_logs/serial_COM9_player.log#21",),
+            )
+            self.assertEqual(marker["player_state"], "START")
+            lifecycle = [
+                json.loads(line)
+                for line in (artifacts.run_dir / "tool_logs" / "player_lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(lifecycle[-1]["lifecycle_status"], "DEVICE_START")
+            self.assertEqual(lifecycle[-1]["broadcast_id"], broadcast["broadcast_id"])
+            self.assertEqual(lifecycle[-1]["raw_marker"], "START")
+            self.assertEqual(lifecycle[-1]["evidence_refs"], ["serial_logs/serial_COM9_player.log#21"])
+            artifacts.finalize("PASS", "fixture complete")
+
+    def test_player_failure_and_device_error_marker_fail_the_current_case(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "player-lifecycle-failure")
+            runtime = ScenarioRuntime(artifacts)
+            audio = Path(directory) / "fixture.mp3"
+            audio.write_bytes(b"fixture audio")
+            runtime.player.play = lambda *_args, **_kwargs: False  # type: ignore[method-assign]
+            failed = runtime.play(audio, case_id="host-failure", expected_recognition={"keyword": "fixture"})
+            self.assertEqual(failed["error"], "playback_failed")
+
+            runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+            broadcast = runtime.play(audio, case_id="device-failure", expected_recognition={"keyword": "fixture"})
+            self.assertNotEqual(failed["broadcast_id"], broadcast["broadcast_id"])
+            marker = runtime.record_player_marker(
+                "ERROR", case_id="device-failure", broadcast_id=broadcast["broadcast_id"],
+                port="COM9", raw_line="[player] error",
+            )
+            self.assertEqual(marker["anomaly_code"], "PLAYER_DEVICE_MARKER_ERROR")
+
+            runtime.record_case(CaseResult("host-failure", "PASS", reason="fixture"))
+            runtime.record_case(CaseResult("device-failure", "PASS", reason="fixture"))
+            summary = artifacts.finalize("FAIL", "fixture complete")
+            self.assertEqual(summary["counts"], {"FAIL": 2})
+            self.assertEqual(summary["anomaly_counts"]["PLAYER_PLAYBACK_FAILED"], 1)
+            self.assertEqual(summary["anomaly_counts"]["PLAYER_DEVICE_MARKER_ERROR"], 1)
+            lifecycle = (artifacts.run_dir / "tool_logs" / "player_lifecycle.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"lifecycle_status":"DEVICE_ERROR"', lifecycle)
+            self.assertIn('"device_playback_status":"FAILED"', lifecycle)
+
+    def test_host_player_success_and_timeout_are_written_to_lifecycle_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "player-host-lifecycle")
+            script = Path(directory) / "player.py"
+            script.write_text("# fixture", encoding="utf-8")
+            audio = Path(directory) / "fixture.mp3"
+            audio.write_bytes(b"fixture audio")
+            completed = SimpleNamespace(returncode=0, stdout="player finished", stderr="")
+            with patch("lstest.scripts.playback.subprocess.run", return_value=completed):
+                player = PlaybackBackend(artifacts, None, script)
+                self.assertTrue(player.play(audio, case_id="success", broadcast_id="broadcast-success", timeout=5.0))
+            with patch(
+                "lstest.scripts.playback.subprocess.run",
+                side_effect=__import__("subprocess").TimeoutExpired("player", 0.1, output="partial output"),
+            ):
+                self.assertFalse(player.play(audio, case_id="timeout", broadcast_id="broadcast-timeout", timeout=0.1))
+            lifecycle = [
+                json.loads(line)
+                for line in (artifacts.run_dir / "tool_logs" / "player_lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            success = [row for row in lifecycle if row["broadcast_id"] == "broadcast-success"]
+            timeout = [row for row in lifecycle if row["broadcast_id"] == "broadcast-timeout"]
+            self.assertEqual([row["lifecycle_status"] for row in success], ["REQUESTED", "PROCESS_STARTED", "COMPLETED"])
+            self.assertEqual(timeout[-1]["lifecycle_status"], "TIMEOUT")
+            timeout_output = (artifacts.run_dir / "tool_logs" / "play_timeout.log").read_text(encoding="utf-8")
+            self.assertIn("partial output", timeout_output)
+            artifacts.finalize("PASS", "fixture complete")
+
     def test_ordered_wake_word_verification_requires_current_raw_result(self):
         with tempfile.TemporaryDirectory() as directory:
             artifacts = TaskArtifacts(Path(directory), "wake-word-contract")
@@ -465,6 +589,138 @@ class FoundationTests(unittest.TestCase):
             sender = ProfileCommandSender(DeviceProfile.load(path), artifacts, lambda _command, _port: "level=4")
             self.assertEqual(sender.send("log.level 4", role="csk", port="COM9")["status"], "PASS")
             self.assertEqual(sender.send("log.level 4", role="csk", port="COM1")["status"], "BLOCKED_PORT_POLICY")
+            artifacts.finalize("PASS", "fixture complete")
+
+    def test_recovery_waits_for_initialization_and_validates_serial_ack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile_path = root / "profile.json"
+            profile_path.write_text(json.dumps({
+                **PROFILE,
+                "initialization_patterns": ["algo ready"],
+                "commands": [{
+                    "command": "log.level 4", "roles": ["csk"], "safe_init": True,
+                    "success_patterns": ["set level 4 ok"], "retries": 1, "timeout_s": 0.1,
+                }],
+            }), encoding="utf-8")
+            artifacts = TaskArtifacts(root, "recovery-ack")
+            spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM9", "baudrate": 115200, "role": "csk"}]})
+            manager = RecoveryManager(spec.ports, [
+                [RecoveryEvent("COM9", "csk", 1, "algo ready")],
+                [RecoveryEvent("COM9", "csk", 2, "set level 4 ok")],
+            ])
+            result = ProfileRecoveryStateMachine(DeviceProfile.load(profile_path), artifacts, manager).run(0.1)
+            self.assertEqual(result["status"], "PASS")
+            self.assertEqual(manager.writes, [("log.level 4", "COM9")])
+            self.assertEqual(result["commands"][0]["validation_source"], "serial_ack")
+            self.assertTrue(result["commands"][0]["evidence_refs"])
+            artifacts.finalize("PASS", "fixture complete")
+
+    def test_recovery_accepts_profile_evidence_only_when_no_ack_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile_path = root / "profile.json"
+            profile_path.write_text(json.dumps({
+                **PROFILE,
+                "initialization_patterns": ["algo ready"],
+                "commands": [{
+                    "command": "log.level 4", "roles": ["csk"], "safe_init": True,
+                    "success_patterns": ["ack level 4"], "evidence_patterns": ["log level is 4"],
+                    "timeout_s": 0.05, "evidence_timeout_s": 0.05,
+                }],
+            }), encoding="utf-8")
+            artifacts = TaskArtifacts(root, "recovery-evidence")
+            spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM9", "baudrate": 115200, "role": "csk"}]})
+            manager = RecoveryManager(spec.ports, [
+                [RecoveryEvent("COM9", "csk", 1, "algo ready")],
+                [],
+                [RecoveryEvent("COM9", "csk", 2, "log level is 4")],
+            ])
+            result = ProfileRecoveryStateMachine(DeviceProfile.load(profile_path), artifacts, manager).run(0.1)
+            self.assertEqual(result["status"], "PASS")
+            self.assertEqual(result["commands"][0]["validation_source"], "serial_evidence")
+            artifacts.finalize("PASS", "fixture complete")
+
+    def test_recovery_retries_and_records_failure_when_ack_and_evidence_are_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile_path = root / "profile.json"
+            profile_path.write_text(json.dumps({
+                **PROFILE,
+                "initialization_patterns": ["algo ready"],
+                "commands": [{
+                    "command": "log.level 4", "roles": ["csk"], "safe_init": True,
+                    "success_patterns": ["ack level 4"], "evidence_patterns": ["log level is 4"],
+                    "retries": 1, "timeout_s": 0.01, "evidence_timeout_s": 0.01, "retry_delay_s": 0.01,
+                }],
+            }), encoding="utf-8")
+            artifacts = TaskArtifacts(root, "recovery-retry")
+            spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM9", "baudrate": 115200, "role": "csk"}]})
+            manager = RecoveryManager(spec.ports, [[RecoveryEvent("COM9", "csk", 1, "algo ready")], [], [], [], []])
+            result = ProfileRecoveryStateMachine(DeviceProfile.load(profile_path), artifacts, manager).run(0.1)
+            self.assertEqual(result["status"], "BLOCKED")
+            self.assertEqual(len(manager.writes), 2)
+            self.assertEqual(result["commands"][0]["reason"], "no_ack_or_evidence")
+            self.assertEqual(artifacts.anomaly_counts["INITIALIZATION_RECOVERY_FAILED"], 1)
+            self.assertEqual(artifacts.check_runtime(), "INITIALIZATION_RECOVERY_FAILED")
+            recovery_log = (artifacts.run_dir / "tool_logs" / "initialization_recovery.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"status":"BLOCKED"', recovery_log)
+            artifacts.finalize("FAIL", "fixture complete")
+
+    def test_recovery_does_not_replace_a_mismatched_direct_ack_with_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile_path = root / "profile.json"
+            profile_path.write_text(json.dumps({
+                **PROFILE,
+                "initialization_patterns": ["algo ready"],
+                "commands": [{
+                    "command": "log.level 4", "roles": ["csk"], "safe_init": True,
+                    "success_patterns": ["ack level 4"], "evidence_patterns": ["log level is 4"],
+                    "retries": 0,
+                }],
+            }), encoding="utf-8")
+            artifacts = TaskArtifacts(root, "recovery-direct-ack")
+            spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM9", "baudrate": 115200, "role": "csk"}]})
+            manager = RecoveryManager(spec.ports, [[RecoveryEvent("COM9", "csk", 1, "algo ready")]])
+            sender = ProfileCommandSender(
+                DeviceProfile.load(profile_path), artifacts, lambda _command, _port: "ack level 3", manager,
+            )
+            result = sender.send("log.level 4", role="csk", port="COM9")
+            self.assertEqual(result["status"], "FAIL")
+            self.assertEqual(result["reason"], "direct_ack_not_matched")
+            self.assertEqual(manager.wait_calls, [])
+            artifacts.finalize("FAIL", "fixture complete")
+
+    def test_restart_monitor_waits_for_new_initialization_then_recovers_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile_path = root / "profile.json"
+            profile_path.write_text(json.dumps({
+                **PROFILE,
+                "initialization_patterns": ["algo ready"],
+                "restart_patterns": ["device rebooted"],
+                "commands": [{
+                    "command": "log.level 4", "roles": ["csk"], "safe_init": True,
+                    "success_patterns": ["level 4 ok"], "timeout_s": 0.05,
+                }],
+            }), encoding="utf-8")
+            artifacts = TaskArtifacts(root, "restart-recovery")
+            spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM9", "baudrate": 115200, "role": "csk"}]})
+            manager = RecoveryManager(spec.ports, [
+                [RecoveryEvent("COM9", "csk", 2, "algo ready")],
+                [RecoveryEvent("COM9", "csk", 3, "level 4 ok")],
+            ])
+            manager.events.append(RecoveryEvent("COM9", "csk", 1, "device rebooted"))
+            monitor = ProfileRestartRecoveryMonitor(
+                DeviceProfile.load(profile_path), artifacts, manager, initialization_timeout_s=0.1,
+            )
+            recovery = monitor.poll()
+            self.assertEqual(len(recovery), 1)
+            self.assertEqual(recovery[0]["status"], "PASS")
+            self.assertEqual(recovery[0]["recovery_reason"], "restart")
+            self.assertEqual(manager.writes, [("log.level 4", "COM9")])
+            monitor.stop()
             artifacts.finalize("PASS", "fixture complete")
 
     def test_wakeup_command_and_online_status_are_explicit(self):

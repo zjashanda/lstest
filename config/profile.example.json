@@ -13,7 +13,24 @@
   ],
   "initialization_patterns": ["algo\\s+ready"],
   "restart_patterns": ["unexpected\\s+reboot"],
-  "commands": [],
+  "recovery": {
+    "initialization_timeout_s": 10.0,
+    "restart_poll_interval_s": 0.1,
+    "stop_on_failure": true
+  },
+  "commands": [
+    {
+      "command": "project-defined initialization command",
+      "roles": ["csk"],
+      "safe_init": false,
+      "success_patterns": ["project-defined success acknowledgement"],
+      "evidence_patterns": ["project-defined post-command evidence"],
+      "retries": 1,
+      "timeout_s": 3.0,
+      "evidence_timeout_s": 3.0,
+      "retry_delay_s": 0.2
+    }
+  ],
   "correlation": {
     "id": "project-defined",
     "fields": ["queryId", "requestId", "traceId"]

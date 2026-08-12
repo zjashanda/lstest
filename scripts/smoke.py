@@ -66,7 +66,7 @@ def run_smoke(connection: ConnectionSpec, profile_path: Path, *, hardware: bool 
             artifacts.set_capability("initialization", "PASS" if init_ok else "WARN", "profile initialization marker observed" if init_ok else "no new initialization marker in smoke window", marker_count=len(init_events))
             artifacts.set_capability("player", "PASS", "explicit player probe passed")
             if status != "BLOCKED":
-                recovery = ProfileRecoveryStateMachine(profile, artifacts, capture).run()
+                recovery = runtime.recover_initialization(capture)
                 command_results = recovery.get("commands", [])
                 if command_results:
                     command_statuses = {str(item.get("status")) for item in command_results}
