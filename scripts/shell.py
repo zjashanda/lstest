@@ -485,6 +485,21 @@ class ProfileRecoveryStateMachine:
                 "commands": [],
             })
 
+        # The marker regex is profile-owned; the main log only receives the
+        # extracted lifecycle fact and a separate framework judgement.
+        first_init = init_events[0]
+        self.artifacts.emit_fact(
+            "INIT_READY", "ready", tag="DEVICE",
+            evidence=ProfileCommandSender._evidence_refs(init_events),
+            port=getattr(first_init, "port", ""),
+            role=getattr(first_init, "role", ""),
+            epoch=epoch if epoch is not None else self.artifacts.current_epoch,
+        )
+        self.artifacts.emit_judgement(
+            "初始化", "PASS", tag="RESULT",
+            evidence=ProfileCommandSender._evidence_refs(init_events),
+        )
+
         recovery = self.profile.recovery if hasattr(self.profile, "recovery") else {}
         resolved_stable_for_s = (
             max(0.0, float(stable_for_s))
@@ -507,6 +522,7 @@ class ProfileRecoveryStateMachine:
                 return self._complete(self._cancelled_result(
                     recovery_reason=recovery_reason, epoch=epoch, state=self.state, restart_event=restart_event,
                 ))
+            self.artifacts.emit_fact("INIT_STABLE", "ready", tag="DEVICE", evidence=ProfileCommandSender._evidence_refs(init_events))
 
         self.state = "SEND_APPROVED"
         sender = ProfileCommandSender(self.profile, self.artifacts, self.manager.write, self.manager)

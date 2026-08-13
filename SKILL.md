@@ -7,6 +7,8 @@ description: 通用设备初始化、Edge TTS 音频合成、ListenAI 声卡枚�
 
 `lstest` 是从既有设备项目提炼的跨项目测试验证和压测标准执行框架。它沉淀连接、Edge TTS 音频合成、声卡策略、连续串口证据、播放-识别关联、初始化/重启恢复、异常统计、日志、耗时、停止恢复和结果判定；项目适配测试 Skill 只补充项目协议、设备标记、Shell 命令、在线关联字段、语料与业务判定。
 
+`lstest` 本身不包含任何具体项目正则、固定唤醒词、串口命令或设备字段。新项目只需基于本框架创建独立适配 Skill：在自己的 profile 中填写初始化完成、重启、日志等级回执/旁证、唤醒、离线/在线识别、播放器和关联异常正则，并通过场景回调提交提取事实、期望值和判定；不得为了适配项目修改 `lstest` 底座。
+
 ## 使用边界
 
 - 端口、波特率和 profile 必须由调用者或项目配置提供；框架不猜测 COM 号，不固定 `queryId` 或 Shell 命令。播放未指定声卡 key 时使用操作系统当前默认 Render 声卡；只有显式提供 key 时才严格绑定指定声卡。
@@ -52,6 +54,30 @@ python -u lstest/scripts/lstest.py smoke --profile <profile.json> --port COM11 -
 9. 多唤醒词项目必须在 profile 的有序 `wake_words` 需求表中配置每一项的 `wake_word_id`、播报文本和设备侧 `expected_raw`；按清单逐项播报、逐项确认当前唤醒词，不能由任意唤醒成功替代当前项。无播报唤醒或同一播报多条唤醒结果也必须记录异常。
 10. 压测每轮结束后在终端和 `tool.log` 打印 required/optional 检查矩阵与从任务开始至当前轮的累计异常统计；该计数不因轮次变化、串口重连或设备重启清零，相邻事件块之间保留一行空白。连续无唤醒、无识别或播放器异常达到 profile 阈值时记录快照和恢复提示，默认继续执行；可在结果目录创建 `STOP` 安全停止。
 11. 结束后从 `results.csv` 重算统计与有效分母，复核 `tool.log`、CSV 和分端口原始串口证据；短冒烟测试不覆盖长压结论。
+
+## 工具日志固定模板
+
+`tool.log` 是给测试人员看的执行过程账本，必须按固定单行格式输出，禁止模型或项目适配器自行设计日志格式、节点标签或字段顺序。正则只在调试阶段写入 profile/规则集并验证；正式日志不输出正则表达式本身，只输出正则提取到的固定 `KEY: VALUE` 事实，工具判定紧跟在下一行单独输出。主流程节点只允许 `[CASE]`、`[ACTION]`、`[DEVICE]`、`[ONLINE]`、`[PLAYER]`、`[RESULT]`、`[COMMAND]`、`[ERROR]`、`[SUMMARY]`、`[SYSTEM]`；未知事件统一归入 `[SYSTEM]`。标准示例：
+
+```text
+2026-08-13 14:02:11.210 [CASE 1/5] START 场景=online-interaction 文本=今天的天气
+2026-08-13 14:02:11.236 [ACTION] 播放=default_wake 文本=小T小T 文件=小T小T.mp3
+2026-08-13 14:02:14.801 [DEVICE] WAKE: xiao ti xiao ti 播报ID=1003
+2026-08-13 14:02:14.802 [RESULT] 判定: 唤醒=PASS 播报ID=1003
+2026-08-13 14:02:16.310 [ACTION] 播放: 今天的天气
+2026-08-13 14:02:16.311 [ACTION] PLAY_URL: http://example.test/weather.mp3
+2026-08-13 14:02:16.312 [ACTION] BROADCAST_ID: 1004
+2026-08-13 14:02:19.455 [ONLINE] ONLINE_ASR: 今天的天气 播报ID=1004
+2026-08-13 14:02:19.456 [ONLINE] REQUEST_ID: e659... RESPONSE_ID: e659..._0 ASR耗时=653ms
+2026-08-13 14:02:19.457 [RESULT] 判定: 在线识别=PASS 配对=PASS 播报ID=1004
+2026-08-13 14:02:19.620 [PLAYER] PLAYER: playing 播报ID=1004
+2026-08-13 14:02:19.621 [RESULT] 判定: 播放器=PASS 播报ID=1004
+2026-08-13 14:02:22.015 [PLAYER] PLAYER: stop 播报ID=1004
+2026-08-13 14:02:22.016 [RESULT] 判定: 播放器=PASS 播报ID=1004
+2026-08-13 14:02:22.030 [RESULT] 判定: 本轮=PASS 唤醒=PASS 在线识别=PASS 播放器=PASS
+```
+
+每行固定使用北京时间 `YYYY-MM-DD HH:mm:ss.SSS`；`CASE` 显示 `当前序号/总用例数`；播报行显示文本、`OFFLINE_TONE`/`PLAY_URL` 和 `BROADCAST_ID`；设备行显示 `WAKE`、`OFFLINE_ASR`、`OFFLINE_INTENT` 等正则提取的原始事实；在线行显示 `ONLINE_ASR`、`REQUEST_ID`、`RESPONSE_ID` 和耗时；播放器行显示 `PLAYER: playing/stop`；结果行只显示独立工具判定。初始化、日志等级、重启、回执、重试、异常和累计统计分别使用固定节点。
 
 ## 结果与状态
 

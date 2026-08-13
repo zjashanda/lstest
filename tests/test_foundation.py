@@ -143,6 +143,69 @@ class FoundationTests(unittest.TestCase):
             self.assertTrue((artifacts.run_dir / "cases.csv").is_file())
             self.assertEqual({item.name for item in artifacts.run_dir.iterdir()}, {"serial_logs", "tool.log", "results.csv", "cases.csv"})
 
+    def test_tool_log_uses_fixed_human_readable_node_template(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "human-log")
+            artifacts.freeze_cases([{
+                "case_id": "online-weather-01",
+                "scenario": "online-interaction",
+                "input_text": "今天的天气",
+            }] * 5)
+            artifacts.emit(
+                "CASE_WINDOW_OPENED", case_id="online-weather-01", scenario="online-interaction",
+                input_text="今天的天气", raw={"case_id": "online-weather-01"},
+            )
+            artifacts.emit(
+                "BROADCAST_STARTED", case_id="online-weather-01", broadcast_id="broadcast-000001",
+                playback_name="default_wake", input_text="小T小T", audio_file="小T小T.mp3",
+                raw={"broadcast_id": "broadcast-000001"},
+            )
+            artifacts.emit(
+                "WAKE_WORD_VERIFIED", case_id="online-weather-01", broadcast_id="broadcast-000001",
+                status="PASS", raw={"raw_values": {"keyword": "xiao ti xiao ti"}},
+            )
+            artifacts.emit(
+                "BROADCAST_STARTED", case_id="online-weather-01", broadcast_id="broadcast-000002",
+                playback_name="command", input_text="今天的天气", audio_file="online_weather_01.mp3",
+                raw={"broadcast_id": "broadcast-000002"},
+            )
+            artifacts.emit(
+                "RECOGNITION_RAW_RECORDED", case_id="online-weather-01",
+                broadcast_id="broadcast-000002", recognition_source="online",
+                request_id="e659...", response_id="e659..._0", correlation_valid=True,
+                recognition_latency_ms=653, raw={"text": "今天的天气"},
+            )
+            artifacts.emit(
+                "PLAYER_LIFECYCLE", case_id="online-weather-01", broadcast_id="broadcast-000002",
+                raw_marker="PLAYER_PLAYING", player_state="START", lifecycle_status="DEVICE_START",
+            )
+            artifacts.emit(
+                "PLAYER_LIFECYCLE", case_id="online-weather-01", broadcast_id="broadcast-000002",
+                raw_marker="PLAYER_COMPLETE", player_state="END", lifecycle_status="DEVICE_END",
+            )
+            artifacts.emit(
+                "CASE_RESULT", case_id="online-weather-01", status="PASS",
+                raw={"case": {"raw_status": "PASS", "facts": {
+                    "wake": {"status": "PASS"}, "asr": {"status": "OBSERVED"},
+                    "online": {"status": "PASS"}, "player": {"status": "COMPLETED"},
+                }}},
+            )
+            artifacts.finalize("PASS", "fixture complete")
+            log = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
+            self.assertIn("[CASE 1/5] START", log)
+            self.assertIn("[ACTION] 播放=default_wake 文本=小T小T 文件=小T小T.mp3", log)
+            self.assertIn("[DEVICE] WAKE: xiao ti xiao ti", log)
+            self.assertIn("[RESULT] 判定: 唤醒=PASS", log)
+            self.assertIn("[ONLINE] REQUEST_ID: e659...", log)
+            self.assertIn("[ONLINE] RESPONSE_ID: e659..._0", log)
+            self.assertIn("[ONLINE] ONLINE_ASR: 今天的天气", log)
+            self.assertIn("[ONLINE] ASR_LATENCY_MS: 653", log)
+            self.assertIn("[PLAYER] PLAYER: playing", log)
+            self.assertIn("[PLAYER] PLAYER: stop", log)
+            self.assertIn("[RESULT] 判定: 本轮=PASS", log)
+            self.assertNotIn("time:", log)
+            self.assertNotIn("level:", log)
+
     def test_cases_are_frozen_as_utf8_bom_before_playback_and_results_reconcile(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -201,7 +264,7 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(summary["exception_counts"], expected)
             self.assertEqual(summary["exception_total"], 3)
             tool_log = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
-            self.assertEqual(tool_log.count("[EXCEPTION_SUMMARY]"), 4)
+            self.assertEqual(tool_log.count("[SUMMARY]"), 4)
             self.assertIn("\n\n", tool_log)
 
     def test_serial_manager_writes_independent_port_log(self):
@@ -295,9 +358,9 @@ class FoundationTests(unittest.TestCase):
             artifacts.finalize("PASS", "fixture complete")
             tool_log = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
             self.assertIn("da kai kong tiao", tool_log)
-            self.assertIn("command_status\": \"PASS", tool_log)
-            self.assertIn("tool_status\": \"PASS", tool_log)
-            self.assertIn("keyword: da kai kong tiao", output.getvalue())
+            self.assertIn("[DEVICE] OFFLINE_ASR: da kai kong tiao", tool_log)
+            self.assertIn("[RESULT] 判定: COMMAND=PASS", tool_log)
+            self.assertIn("da kai kong tiao", output.getvalue())
 
     def test_tool_log_and_player_marker_keep_raw_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -375,7 +438,7 @@ class FoundationTests(unittest.TestCase):
                 self.assertEqual(summary["anomaly_counts"]["ONLINE_CORRELATION_INVALID"], 1)
                 tool_log = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
                 self.assertIn("ni3 hao3 kong1 tiao2", tool_log)
-                self.assertIn("RECOGNITION_RAW_RECORDED", tool_log)
+                self.assertIn("OFFLINE_ASR:", tool_log)
             finally:
                 if not artifacts.closed:
                     artifacts.finalize("FAIL", "test cleanup")
@@ -528,7 +591,7 @@ class FoundationTests(unittest.TestCase):
             runtime.record_case(CaseResult("case", "PASS", reason="fixture"))
             summary = artifacts.finalize("PASS", "fixture complete")
             self.assertEqual(summary["status"], "FAIL")
-            self.assertIn("HEALTH_SESSION_RECOVERY_COMPLETED", (artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
+            self.assertIn("会话恢复回调已完成", (artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
 
     def test_multiple_wake_results_for_one_playback_are_recorded_as_anomalies(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -597,7 +660,7 @@ class FoundationTests(unittest.TestCase):
             )
             self.assertEqual(marker["player_state"], "START")
             lifecycle = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
-            self.assertIn("DEVICE_START", lifecycle)
+            self.assertIn("PLAYER: playing", lifecycle)
             self.assertIn(broadcast["broadcast_id"], lifecycle)
             self.assertIn("serial_logs/serial_COM9_player.log#21", lifecycle)
             artifacts.finalize("PASS", "fixture complete")
@@ -629,8 +692,8 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(summary["anomaly_counts"]["PLAYER_PLAYBACK_FAILED"], 1)
             self.assertEqual(summary["anomaly_counts"]["PLAYER_DEVICE_MARKER_ERROR"], 1)
             lifecycle = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
-            self.assertIn("DEVICE_ERROR", lifecycle)
-            self.assertIn("FAILED", lifecycle)
+            self.assertIn("PLAYER: error", lifecycle)
+            self.assertIn("PLAYER_DEVICE_MARKER_ERROR", lifecycle)
 
     def test_host_player_success_and_timeout_are_written_to_lifecycle_log(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -649,10 +712,10 @@ class FoundationTests(unittest.TestCase):
             ):
                 self.assertFalse(player.play(audio, case_id="timeout", broadcast_id="broadcast-timeout", timeout=0.1))
             lifecycle = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
-            self.assertIn("REQUESTED", lifecycle)
-            self.assertIn("PROCESS_STARTED", lifecycle)
-            self.assertIn("COMPLETED", lifecycle)
-            self.assertIn("TIMEOUT", lifecycle)
+            self.assertIn("PLAYER: request", lifecycle)
+            self.assertIn("PLAYER: playing", lifecycle)
+            self.assertIn("PLAYER: stop", lifecycle)
+            self.assertIn("PLAYER: timeout", lifecycle)
             self.assertIn("partial output", lifecycle)
             artifacts.finalize("PASS", "fixture complete")
 
@@ -741,6 +804,43 @@ class FoundationTests(unittest.TestCase):
             path.write_text(json.dumps(payload), encoding="utf-8")
             profile = DeviceProfile.load(path)
             self.assertEqual(profile.observation_rules("online")["id_fields"], ["requestId"])
+
+    def test_profile_regex_extracts_only_framework_facts_and_main_log_hides_regex(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profile.json"
+            path.write_text(json.dumps({
+                **PROFILE,
+                "observations": {
+                    "offline_asr": {
+                        "patterns": [{
+                            "rule_id": "PROJECT_OFFLINE_ASR_01",
+                            "pattern": r"keyword=(?P<keyword>[^\s]+)",
+                            "roles": ["csk"],
+                            "phases": ["offline_asr"],
+                            "fact_map": {"keyword": "OFFLINE_ASR"},
+                            "fixtures": {"positive": ["keyword=ni3"], "negative": ["intent=ni3"]},
+                        }],
+                    },
+                },
+            }), encoding="utf-8")
+            profile = DeviceProfile.load(path)
+            rule = profile.observation_rules("offline_asr")["patterns"]
+            match = profile.match_and_extract(rule, "keyword=ni3", role="csk", phase="offline_asr")[0]
+            self.assertTrue(match["matched"])
+            self.assertEqual(match["facts"], {"OFFLINE_ASR": "ni3"})
+            artifacts = TaskArtifacts(Path(directory), "profile-fact")
+            artifacts.emit_fact("OFFLINE_ASR", match["facts"]["OFFLINE_ASR"], evidence="serial_logs/serial_COM9_csk.log#1")
+            artifacts.emit_judgement("离线识别", "PASS")
+            artifacts.finalize("PASS", "fixture complete")
+            log = artifacts.tool_log_path.read_text(encoding="utf-8")
+            self.assertIn("OFFLINE_ASR: ni3", log)
+            self.assertNotIn("PROJECT_OFFLINE_ASR_01", log)
+            self.assertNotIn("keyword=(?P", log)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["observations"]["offline_asr"]["patterns"][0]["fact_map"] = {"keyword": "PROJECT_CUSTOM"}
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(ProfileError):
+                DeviceProfile.load(path)
 
     def test_marker_scope_and_same_event_debounce_are_deterministic(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -848,7 +948,7 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(artifacts.anomaly_counts["INITIALIZATION_RECOVERY_FAILED"], 1)
             self.assertIsNone(artifacts.check_runtime())
             recovery_log = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
-            self.assertIn("PROFILE_RECOVERY_RESULT", recovery_log)
+            self.assertIn("判定: 初始化=", recovery_log)
             artifacts.finalize("FAIL", "fixture complete")
 
     def test_recovery_does_not_replace_a_mismatched_direct_ack_with_evidence(self):
@@ -934,7 +1034,7 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(recovery[0]["status"], "CANCELLED")
             self.assertEqual(recovery[-1]["status"], "PASS")
             self.assertEqual(manager.writes, [("log.level 4", "COM9")])
-            self.assertIn("PROFILE_RECOVERY_CANCELLED", (artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
+            self.assertIn("判定: 重启恢复=CANCELLED", (artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
             monitor.stop()
             artifacts.finalize("PASS", "fixture complete")
 
@@ -991,7 +1091,7 @@ class FoundationTests(unittest.TestCase):
             runtime.record_case(CaseResult("fixture-case", "PASS", reason="runtime"))
             summary = artifacts.finalize("PASS", "fixture complete")
             self.assertEqual(summary["status"], "PASS")
-            self.assertIn("Wakeup keyword", (artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
+            self.assertIn("serial_logs/serial_COM11_csk.log#1", (artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

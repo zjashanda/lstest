@@ -19,6 +19,14 @@ class ProfileError(ValueError):
     pass
 
 
+TOOL_LOG_FACT_KEYS = {
+    "WAKE", "OFFLINE_TONE", "OFFLINE_ASR", "OFFLINE_INTENT", "OFFLINE_TEXT",
+    "OFFLINE_NORMALIZED", "ONLINE_ASR", "REQUEST_ID", "RESPONSE_ID",
+    "ASR_LATENCY_MS", "PLAY_URL", "AUDIO_FILE", "BROADCAST_ID", "PLAYER",
+    "INIT_WAIT", "INIT_READY", "INIT_STABLE", "RESTART", "LOG_LEVEL", "COMMAND",
+}
+
+
 class MarkerGate:
     """Profile-scoped marker matcher with scope and debounce protection."""
 
@@ -79,6 +87,14 @@ class MarkerGate:
         return True, "matched"
 
 
+def _rule_pattern(rule: str | Mapping[str, Any]) -> str:
+    if isinstance(rule, str):
+        return rule
+    if isinstance(rule, Mapping):
+        return str(rule.get("pattern") or rule.get("regex") or "")
+    return ""
+
+
 @dataclass(frozen=True)
 class DeviceProfile:
     profile_id: str
@@ -111,6 +127,15 @@ class DeviceProfile:
             raise ProfileError("commands must be a list")
         if "wake_words" in payload and not isinstance(payload["wake_words"], list):
             raise ProfileError("wake_words must be a list")
+        for category, value in (payload.get("observations", {}) or {}).items():
+            if not isinstance(value, Mapping):
+                continue
+            fact_map = value.get("fact_map", {})
+            if not isinstance(fact_map, Mapping):
+                raise ProfileError(f"observations.{category}.fact_map must be an object")
+            for fact_key in fact_map.values():
+                if str(fact_key).upper() not in TOOL_LOG_FACT_KEYS:
+                    raise ProfileError(f"unsupported fact_map key: {fact_key}")
         for item in payload.get("commands", []):
             if not isinstance(item, Mapping) or not str(item.get("command", "")).strip():
                 raise ProfileError("each command rule requires command")
@@ -180,6 +205,12 @@ class DeviceProfile:
                 raise ProfileError(f"invalid marker regex at {location}: {error}") from error
             if "debounce_ms" in rule and int(rule["debounce_ms"]) < 0:
                 raise ProfileError(f"marker debounce_ms at {location} must be non-negative")
+            fact_map = rule.get("fact_map", {})
+            if fact_map and not isinstance(fact_map, Mapping):
+                raise ProfileError(f"marker fact_map at {location} must be an object")
+            for fact_key in fact_map.values() if isinstance(fact_map, Mapping) else ():
+                if str(fact_key).upper() not in TOOL_LOG_FACT_KEYS:
+                    raise ProfileError(f"unsupported fact_map key at {location}: {fact_key}")
             fixtures = rule.get("fixtures", {})
             if fixtures and not isinstance(fixtures, Mapping):
                 raise ProfileError(f"marker fixtures at {location} must be an object")
@@ -301,6 +332,45 @@ class DeviceProfile:
             (rule, *self.marker_gate.match(rule, text, **scope))
             for rule in patterns
         ]
+
+    def match_and_extract(self, patterns: list[Any], text: str, **scope: Any) -> list[dict[str, Any]]:
+        """匹配项目规则并返回内部提取结果，正式日志不暴露规则文本。
+
+        规则可以使用命名分组，并可通过 ``fact_map`` 将分组映射到框架事实
+        key，例如 ``{"keyword": "WAKE"}``。该接口只负责事实提取和作用域
+        校验，判定与人读日志由公共 runtime 完成。
+        """
+        results: list[dict[str, Any]] = []
+        for index, rule in enumerate(patterns):
+            pattern = _rule_pattern(rule)
+            if not pattern:
+                results.append({"rule_id": f"rule-{index}", "matched": False, "reason": "pattern_missing"})
+                continue
+            matched, reason = self.marker_gate.match(rule, text, **scope)
+            item: dict[str, Any] = {
+                "rule_id": str(rule.get("rule_id") if isinstance(rule, Mapping) else "") or f"rule-{index}",
+                "matched": matched,
+                "reason": reason,
+                "matched_text": "",
+                "captures": {},
+                "facts": {},
+                "evidence": scope.get("evidence", ""),
+            }
+            if matched:
+                match = re.search(pattern, text, flags=re.IGNORECASE)
+                if match is not None:
+                    item["matched_text"] = match.group(0)
+                    item["captures"] = dict(match.groupdict())
+                    if not item["captures"]:
+                        item["captures"] = {str(pos + 1): value for pos, value in enumerate(match.groups())}
+                    mapping = rule.get("fact_map", {}) if isinstance(rule, Mapping) else {}
+                    if isinstance(mapping, Mapping):
+                        for group_name, fact_key in mapping.items():
+                            value = item["captures"].get(str(group_name), "")
+                            if value not in (None, ""):
+                                item["facts"][str(fact_key).upper()] = value
+            results.append(item)
+        return results
 
     def marker_match_reason(self, rule: Any, text: str, **scope: Any) -> str:
         """Expose rejected/debounced marker reasons for project adapter logging."""

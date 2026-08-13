@@ -93,7 +93,11 @@ class PlaybackBackend:
     @staticmethod
     def _timeout_output(error: subprocess.TimeoutExpired) -> str:
         """Keep partial child output as evidence when a bounded wait expires."""
-        values = [getattr(error, "stdout", None), getattr(error, "stderr", None)]
+        values = [
+            getattr(error, "stdout", None),
+            getattr(error, "stderr", None),
+            getattr(error, "output", None),
+        ]
         output = "".join(str(item) for item in values if item)
         return output or str(error)
 

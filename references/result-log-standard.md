@@ -20,9 +20,45 @@ result/YYYYMMDD_HHMMSS_<task>/
 
 所有文本使用 UTF-8，两个 CSV 使用 UTF-8 BOM。用户停止时保留已存在的四类产物；`tool.log` 记录停止与收尾，`results.csv` 保留完成轮及当前 `ABORTED` 轮。除用户创建的临时 `STOP` 控制文件外，目录不应出现其他默认产物。
 
-## tool.log 固定事件块
+## tool.log 固定人读格式
 
-每个事件块之间空一行，固定字段顺序如下；不适用字段写 `-`：
+`tool.log` 面向测试人员阅读，主流程必须是一行一个节点，不能输出由模型或项目适配器临时设计的格式。调试阶段由 profile/规则集维护并验证关键节点正则；正式日志不输出正则表达式、规则 ID 或自由命令名，只输出正则提取出的固定 `KEY: VALUE` 事实，随后由框架单独输出下一行 `判定: ...`。每行使用北京时间毫秒时间戳，节点标签只能是 `[CASE]`、`[ACTION]`、`[DEVICE]`、`[ONLINE]`、`[PLAYER]`、`[RESULT]`、`[COMMAND]`、`[ERROR]`、`[SUMMARY]` 或 `[SYSTEM]`。未知内部事件统一使用 `[SYSTEM]`，不得新增标签。
+
+标准流程模板如下：
+
+```text
+2026-08-13 14:02:11.210 [CASE 1/5] START 场景=online-interaction 文本=今天的天气 case_id=online-weather-01
+2026-08-13 14:02:11.236 [ACTION] 播放: 小T小T
+2026-08-13 14:02:11.237 [ACTION] OFFLINE_TONE: ./wake.tone
+2026-08-13 14:02:11.238 [ACTION] BROADCAST_ID: 1003
+2026-08-13 14:02:14.801 [DEVICE] WAKE: xiao ti xiao ti 播报ID=1003
+2026-08-13 14:02:14.802 [RESULT] 判定: 唤醒=PASS 播报ID=1003
+2026-08-13 14:02:16.310 [ACTION] 播放: 今天的天气
+2026-08-13 14:02:16.311 [ACTION] PLAY_URL: http://example.test/weather.mp3
+2026-08-13 14:02:16.312 [ACTION] BROADCAST_ID: 1004
+2026-08-13 14:02:19.455 [ONLINE] ONLINE_ASR: 今天的天气 播报ID=1004
+2026-08-13 14:02:19.456 [ONLINE] REQUEST_ID: e659... RESPONSE_ID: e659..._0 ASR耗时=653ms
+2026-08-13 14:02:19.457 [RESULT] 判定: 在线识别=PASS 配对=PASS 播报ID=1004
+2026-08-13 14:02:19.620 [PLAYER] PLAYER: playing 播报ID=1004
+2026-08-13 14:02:19.621 [RESULT] 判定: 播放器=PASS 播报ID=1004
+2026-08-13 14:02:22.015 [PLAYER] PLAYER: stop 播报ID=1004
+2026-08-13 14:02:22.016 [RESULT] 判定: 播放器=PASS 播报ID=1004
+2026-08-13 14:02:22.030 [RESULT] 判定: 本轮=PASS 唤醒=PASS 在线识别=PASS 播放器=PASS
+```
+
+固定节点含义：
+
+- `[CASE]`：用例开始/结束、序号、总数、场景和测试文本。
+- `[ACTION]`：实际播放文本、`OFFLINE_TONE`/`PLAY_URL`/`AUDIO_FILE` 和 `BROADCAST_ID`。
+- `[DEVICE]`：正则提取的 `WAKE`、`OFFLINE_ASR`、`OFFLINE_INTENT`、`OFFLINE_TEXT` 等设备原始事实；原始值不改写。
+- `[ONLINE]`：正则提取的 `REQUEST_ID`、`RESPONSE_ID`、`ONLINE_ASR` 和 `ASR_LATENCY_MS`。
+- `[PLAYER]`：正则提取的 `PLAYER: playing/stop/error` 和播放证据。
+- `[RESULT]`：本轮各子项状态和最终判定。
+- `[COMMAND]`、`[ERROR]`、`[SUMMARY]`：初始化命令、回执/重试、异常详情和累计统计。
+
+模型和项目适配器只能调用 `TaskArtifacts.emit_fact`、`emit_judgement`、`emit_observation`、`record_anomaly` 等统一接口，不能直接拼接或写入 `tool.log`。渲染器固定时间戳、节点标签、事实 key、字段顺序和判定行；不适用字段省略，正则只保存在 profile/规则集，原始值使用 `raw`/专用原始字段保留。每轮结束的 `[SUMMARY]` 与相邻节点之间保留一行空白。
+
+框架内部仍保留结构化事件，供结果重算和适配器调试使用；这些字段不是测试人员主日志格式，不能由项目适配器直接写入 `tool.log`。示例：
 
 ```text
 time: 2026-08-13 12:00:00.123

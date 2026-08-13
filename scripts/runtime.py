@@ -217,13 +217,20 @@ class ScenarioRuntime:
             opened_cursors=dict(cursors or {}),
         )
         self.case_windows[key] = window
-        self._case_facts.setdefault(key, {"started_at": self._beijing_now(), "scenario": ""})
+        frozen = self.artifacts.case_metadata(key)
+        self._case_facts.setdefault(key, {
+            "started_at": self._beijing_now(),
+            "scenario": frozen.get("scenario", ""),
+            "input_text": frozen.get("input_text", ""),
+        })
         self.artifacts.emit(
             "CASE_WINDOW_OPENED",
-            message=f"用例窗口已建立：{key}。",
+            message=f"开始执行用例：{key}。",
             case_id=key,
             epoch=window.epoch,
             phase="case_open",
+            scenario=frozen.get("scenario", ""),
+            input_text=frozen.get("input_text", ""),
             raw=window.to_dict(),
         )
         return window
@@ -237,7 +244,12 @@ class ScenarioRuntime:
     def _update_case_facts(self, case_id: str, **fields: Any) -> None:
         if not case_id:
             return
-        current = self._case_facts.setdefault(case_id, {"started_at": self._beijing_now(), "scenario": ""})
+        frozen = self.artifacts.case_metadata(case_id)
+        current = self._case_facts.setdefault(case_id, {
+            "started_at": self._beijing_now(),
+            "scenario": frozen.get("scenario", ""),
+            "input_text": frozen.get("input_text", ""),
+        })
         for name, value in fields.items():
             if isinstance(value, Mapping) and isinstance(current.get(name), Mapping):
                 current[name] = {**dict(current[name]), **dict(value)}
@@ -489,7 +501,12 @@ class ScenarioRuntime:
             },
         )
         self.artifacts.emit(
-            "BROADCAST_STARTED", message=f"播报窗口 {broadcast_id} 已建立。", task_log=True, **broadcast,
+            "BROADCAST_STARTED",
+            message=f"开始播放 {audio_file.name}。",
+            task_log=True,
+            playback_name="command",
+            input_text=self.artifacts.case_metadata(case_id).get("input_text", ""),
+            **broadcast,
         )
         try:
             ok = self.player.play(audio_file, case_id=case_id, broadcast_id=broadcast_id, timeout=timeout)
@@ -805,6 +822,7 @@ class ScenarioRuntime:
         judgement: ToolJudgement | None = None,
         evidence_refs: Iterable[str] = (),
         suppress_content_mismatch: bool = False,
+        human_log: bool = True,
     ) -> dict[str, Any]:
         """Record raw device recognition before any project-side normalization.
 
@@ -836,6 +854,7 @@ class ScenarioRuntime:
             case_id=case_id,
             recognition_source=source_name,
             evidence_refs=refs,
+            human_log=human_log,
         )
         tool_entry = {
             "channel": channel,
@@ -846,17 +865,6 @@ class ScenarioRuntime:
             "normalized": dict(normalized or {}),
             "evidence_refs": refs,
         }
-        self.artifacts.emit(
-            "RECOGNITION_RAW_RECORDED",
-            message=f"已记录 {source_name} 原始识别结果。",
-            case_id=case_id,
-            broadcast_id=broadcast_id or "",
-            phase="recognition",
-            source=source_name,
-            raw=raw_payload,
-            normalized=dict(normalized or {}),
-            evidence=refs,
-        )
         association = self.observe_recognition(
             raw_payload,
             case_id=case_id,
@@ -1000,6 +1008,7 @@ class ScenarioRuntime:
             judgement=judgement,
             evidence_refs=evidence_refs,
             suppress_content_mismatch=True,
+            human_log=False,
         )
         association = dict(recognition["association"])
         wake_payload = {

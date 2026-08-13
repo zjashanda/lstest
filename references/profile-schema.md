@@ -21,7 +21,17 @@
 
 `correlation` 通过 `fields` 和规则 ID 描述项目原生关联字段；可以是 `queryId`、`requestId`、`traceId`、`sessionId`、消息序号或复合键。
 
-`observations` 按项目配置 `wakeup`、`offline_asr`、`online` 等标签提取规则。公共库只使用规则，不固定字段名称和正则内容。
+`observations` 按项目配置 `wakeup`、`offline_asr`、`online` 等标签提取规则。每条对象规则可带稳定 `rule_id` 和 `fact_map`，例如将命名分组 `keyword` 映射为 `OFFLINE_ASR`；公共库只执行规则和映射，不固定字段名称和正则内容。`fact_map` 的目标 key 必须使用框架白名单，项目不能新增日志 key。
+
+调试阶段必须为项目实际需要监控的关键节点补齐正则和 fixture，至少覆盖：
+
+- 设备生命周期：初始化完成、重启开始/完成、稳定可用。
+- 初始化恢复：日志等级设置成功/失败、其他安全初始化命令直接回执和无回执旁证。
+- 唤醒与识别：唤醒词、离线 `keyword`/`intent`/文本、在线请求 ID/响应 ID/原始 ASR/耗时。
+- 播放链路：离线 tone、播放文件或 URL、播报 ID、播放器 playing/stop/complete/error/timeout。
+- 关联和异常：播报与识别关联、无播报结果、多结果、迟到结果、阶段错配和串口断开。
+
+正则、规则 ID、阶段、端口/角色、优先级、去重和超时只保存在 profile/规则集及串口原始日志中。`tool.log` 不输出正则表达式本身，只输出正则提取出的固定事实 key（例如 `WAKE`、`OFFLINE_ASR`、`PLAYER`、`RESTART`、`LOG_LEVEL`），随后由框架单独输出下一行工具判定。
 
 `wake_words` 的每一项至少包含 `wake_word_id`、`spoken_text` 和 `expected_raw`。测试按清单顺序逐项选择当前唤醒词，播报 `spoken_text` 后将设备原始字段逐字与 `expected_raw` 比较；不能以任意唤醒 marker 命中代替当前项确认。例如：
 

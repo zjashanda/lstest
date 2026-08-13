@@ -25,6 +25,17 @@ STICKY_FATAL_MARKERS = {
 }
 NORMAL_CASE_STATUSES = {"PASS", "EXPECTED"}
 
+# Human-readable tool.log is deliberately rendered by this allow-list.  An
+# adapter may emit a new internal event name, but it cannot introduce a new
+# line shape or bracket label; unknown events use the fixed SYSTEM shape.
+LOG_NODE_LABELS = {"CASE", "ACTION", "DEVICE", "ONLINE", "PLAYER", "RESULT", "COMMAND", "ERROR", "SUMMARY", "SYSTEM"}
+LOG_FACT_KEYS = {
+    "TASK", "INIT_WAIT", "INIT_READY", "INIT_STABLE", "RESTART", "LOG_LEVEL", "COMMAND",
+    "WAKE", "OFFLINE_TONE", "OFFLINE_ASR", "OFFLINE_INTENT", "OFFLINE_TEXT",
+    "OFFLINE_NORMALIZED", "ONLINE_ASR", "REQUEST_ID", "RESPONSE_ID",
+    "ASR_LATENCY_MS", "PLAY_URL", "AUDIO_FILE", "BROADCAST_ID", "PLAYER",
+}
+
 
 def now_dt() -> datetime:
     return datetime.now(BEIJING)
@@ -271,6 +282,8 @@ class TaskArtifacts:
         self._cases.flush()
         self._cases_frozen = False
         self._frozen_case_count = 0
+        self._case_positions: dict[str, int] = {}
+        self._case_metadata: dict[str, dict[str, Any]] = {}
         self.counts: dict[str, int] = {}
         self.exception_counts: dict[str, int] = {}
         self.anomaly_counts: dict[str, int] = {}
@@ -343,13 +356,326 @@ class TaskArtifacts:
             "message": message,
             "details": values,
         }
-        return "\n".join(
-            ["=" * 78, *[f"{name}: {self._text(known[name])}" for name in self.TOOL_FIELDS], ""]
-        ) + "\n"
+        return self._render_tool_line(event, level, message, known)
+
+    def _render_tool_line(self, event: str, level: str, message: str, known: Mapping[str, Any]) -> str:
+        """Render the compact, two-layer human ledger.
+
+        Device/profile regexes are intentionally hidden here.  They are kept
+        in the profile and the continuous serial log is the raw evidence.  The
+        main ledger shows only the extracted ``KEY: VALUE`` fact; a judgement
+        is rendered on the following line so device facts cannot be confused
+        with a tool-derived PASS/FAIL decision.
+        """
+        event_name = str(event or "EVENT").upper()
+        case_id = str(known.get("case_id") or "")
+        position = self._case_positions.get(case_id)
+        case_prefix = f"{position}/{self._frozen_case_count}" if position else "-/-"
+        metadata = self._case_metadata.get(case_id, {})
+        raw = known.get("raw")
+        raw_text = ""
+        raw_items = raw if isinstance(raw, list) else []
+        if isinstance(raw, str):
+            raw_text = raw
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                pass
+        if not isinstance(raw, Mapping):
+            if raw_items and all(isinstance(item, Mapping) for item in raw_items):
+                raw = {
+                    str(item.get("tag_name")): item.get("raw_value")
+                    for item in raw_items
+                    if str(item.get("tag_name") or "").strip()
+                }
+            else:
+                raw = {}
+        normalized = known.get("normalized")
+        if not isinstance(normalized, Mapping):
+            normalized = {}
+        details = known.get("details")
+        if not isinstance(details, Mapping):
+            details = {}
+
+        def value(*names: str, default: Any = "") -> Any:
+            for name in names:
+                candidate = known.get(name)
+                if candidate not in (None, "", [], {}):
+                    return candidate
+                candidate = details.get(name)
+                if candidate not in (None, "", [], {}):
+                    return candidate
+                candidate = raw.get(name)
+                if candidate not in (None, "", [], {}):
+                    return candidate
+            return default
+
+        def inline(value_to_render: Any) -> str:
+            return self._text(value_to_render)
+
+        def suffix(*pairs: tuple[str, Any]) -> str:
+            return " ".join(f"{name}={inline(item)}" for name, item in pairs if item not in (None, "", [], {}))
+
+        def fact(tag: str, key: str, value_to_render: Any, *extra: tuple[str, Any]) -> str:
+            line = f"{key}: {inline(value_to_render)}"
+            tail = suffix(*extra)
+            if tail:
+                line += f" {tail}"
+            return f"{known['time']} [{tag}] {line}\n"
+
+        def judgement(tag: str, name: str, status: Any, *extra: tuple[str, Any]) -> str:
+            line = f"判定: {name}={inline(status)}"
+            tail = suffix(*extra)
+            if tail:
+                line += f" {tail}"
+            return f"{known['time']} [{tag}] {line}\n"
+
+        def raw_value(*names: str, default: Any = "") -> Any:
+            for name in names:
+                candidate = raw.get(name)
+                if candidate not in (None, "", [], {}):
+                    return candidate
+                candidate = value(name)
+                if candidate not in (None, "", [], {}):
+                    return candidate
+            return default
+
+        def judgement_status(default: Any = "") -> Any:
+            return value("tool_status", "wakeup_status", "command_status", "online_status", "player_status", "status", default=default)
+
+        if event_name == "FIXED_FACT":
+            key = str(value("fact_key", default="DEVICE")).upper()
+            if key not in LOG_FACT_KEYS:
+                key = "DEVICE_" + key
+            return fact(str(value("tag", default="DEVICE")).upper(), key, value("fact_value"), ("证据", value("evidence")))
+        if event_name == "FIXED_JUDGEMENT":
+            return judgement(str(value("tag", default="RESULT")).upper(), value("judgement_name", default="结果"), value("judgement_status", "status", default=""), ("原因", value("reason")), ("证据", value("evidence")))
+
+        tag = "EVENT"
+        line = ""
+        if event_name in {"CASE_WINDOW_OPENED", "CASE_STARTED"}:
+            tag = "CASE"
+            line = "START "
+            line += suffix(
+                ("场景", value("scenario", default=metadata.get("scenario", ""))),
+                ("文本", value("input_text", "text", default=metadata.get("input_text", ""))),
+                ("case_id", case_id),
+                ("epoch", known.get("epoch", "")),
+            )
+            return f"{known['time']} [{tag} {case_prefix}] {line}\n"
+        if event_name in {"CASE_WINDOW_CLOSED", "CASE_CLOSED"}:
+            tag = "CASE"
+            line = suffix(("END", "END"), ("case_id", case_id), ("原因", known.get("reason", "")), ("epoch", known.get("epoch", "")))
+            return f"{known['time']} [{tag} {case_prefix}] {line}\n"
+        if event_name == "BROADCAST_STARTED":
+            tag = "ACTION"
+            audio = value("audio_file", "audio", default=metadata.get("audio_path", ""))
+            stem = Path(str(audio)).stem if audio else ""
+            label = value("playback_name", "action", default="default_wake" if any(token in stem.lower() for token in ("wake", "wakeup", "唤醒")) else "command")
+            text = value("spoken_text", "input_text", "text", default=metadata.get("input_text", ""))
+            lines = [f"{known['time']} [{tag}] 播放={inline(label)} 文本={inline(text)} 文件={inline(audio)}"]
+            if audio:
+                audio_text = str(audio)
+                if audio_text.lower().startswith(("http://", "https://")):
+                    key = "PLAY_URL"
+                elif audio_text.lower().endswith(".tone"):
+                    key = "OFFLINE_TONE"
+                else:
+                    key = "AUDIO_FILE"
+                if key != "AUDIO_FILE":
+                    lines.append(f"{known['time']} [{tag}] {key}: {inline(audio)}")
+            if value("broadcast_id"):
+                lines.append(f"{known['time']} [{tag}] BROADCAST_ID: {inline(value('broadcast_id'))}")
+            return "\n".join(lines) + "\n"
+        if event_name in {"WAKE_WORD_VERIFIED", "WAKEUP", "RAW_WAKEUP"}:
+            tag = "DEVICE"
+            raw_values = raw.get("raw_values") if isinstance(raw.get("raw_values"), Mapping) else raw
+            keyword = raw_values.get("keyword", value("keyword", "wake_keyword"))
+            line = fact(tag, "WAKE", keyword, ("播报ID", value("broadcast_id")), ("证据", value("evidence")))
+            return line + judgement("RESULT", "唤醒", judgement_status(known.get("status", "")), ("播报ID", value("broadcast_id")))
+        if event_name in {"RAW_RECOGNITION", "RECOGNITION_RAW_RECORDED"} and str(value("recognition_source", "source")).lower() == "offline":
+            tag = "DEVICE"
+            keyword = raw.get("keyword", "")
+            intent = raw.get("intent", "")
+            asr = raw.get("text", raw.get("asr_text", ""))
+            lines = []
+            if keyword:
+                lines.append(fact(tag, "OFFLINE_ASR", keyword, ("播报ID", value("broadcast_id"))))
+            if intent:
+                lines.append(fact(tag, "OFFLINE_INTENT", intent, ("播报ID", value("broadcast_id"))))
+            if asr:
+                lines.append(fact(tag, "OFFLINE_TEXT", asr, ("播报ID", value("broadcast_id"))))
+            if normalized:
+                normalized_text = normalized.get("text", normalized.get("normalized", normalized.get("command", "")))
+                if normalized_text:
+                    lines.append(fact(tag, "OFFLINE_NORMALIZED", normalized_text, ("播报ID", value("broadcast_id"))))
+            lines.append(judgement("RESULT", "离线识别", judgement_status(known.get("status", "")), ("播报ID", value("broadcast_id")), ("配对", value("association_status", "association"))))
+            return "".join(lines)
+        if event_name == "ONLINE_REQUEST_RECORDED":
+            tag = "ONLINE"
+            request_id = value("request_id", "requestId", "correlation_id") or raw.get("request_id", raw.get("requestId", ""))
+            return fact(tag, "REQUEST_ID", request_id, ("播报ID", value("broadcast_id")))
+        if event_name in {"ONLINE_RESPONSE", "ONLINE_RECOGNITION", "RAW_RECOGNITION", "RECOGNITION_RAW_RECORDED"} and str(value("recognition_source", "source")).lower() == "online":
+            tag = "ONLINE"
+            request_id = value("request_id", "requestId", "correlation_id") or raw.get("request_id", raw.get("requestId", ""))
+            response_id = value("response_id", "responseId") or raw.get("response_id", raw.get("responseId", ""))
+            asr = raw.get("asr_text", raw.get("text", raw.get("asr", "")))
+            correlation = value("correlation_valid", "valid", default="")
+            latency = value("recognition_latency_ms", "elapsed_ms", "duration_ms")
+            lines = []
+            if request_id:
+                lines.append(fact(tag, "REQUEST_ID", request_id, ("播报ID", value("broadcast_id"))))
+            if response_id:
+                lines.append(fact(tag, "RESPONSE_ID", response_id, ("播报ID", value("broadcast_id"))))
+            if asr:
+                lines.append(fact(tag, "ONLINE_ASR", asr, ("播报ID", value("broadcast_id"))))
+            if latency not in (None, "", "-"):
+                lines.append(fact(tag, "ASR_LATENCY_MS", latency, ("播报ID", value("broadcast_id"))))
+            pair_status = "PASS" if correlation is True or str(correlation).upper() == "PASS" else ("FAIL" if correlation is False else correlation)
+            lines.append(judgement("RESULT", "在线识别", judgement_status(pair_status), ("配对", pair_status), ("播报ID", value("broadcast_id"))))
+            return "".join(lines)
+        if event_name.startswith("PLAYER_") or event_name.startswith("HOST_AUDIO_") or event_name in {"PLAYER_LIFECYCLE", "BROADCAST_FAILED", "BROADCAST_ENDED"}:
+            tag = "PLAYER"
+            marker = value("marker", "raw_marker", "player_marker", default=event_name)
+            state = value("lifecycle_status", "player_state", "device_playback_status", "status", default=known.get("status", ""))
+            state_name = str(state).upper()
+            if state_name.startswith("DEVICE_"):
+                state_name = state_name.removeprefix("DEVICE_")
+            if state_name in {"PROCESS_STARTED", "START", "RUNNING"}:
+                state = "playing"
+            elif state_name in {"COMPLETED", "PROBE_COMPLETED", "END", "STOP", "STOPPED"}:
+                state = "stop"
+            elif state_name in {"REQUESTED", "PROBE_REQUESTED"}:
+                state = "request"
+            else:
+                state = state_name.lower()
+            status = "PASS" if state in {"playing", "stop"} else ("FAIL" if state in {"error", "timeout", "blocked", "failed"} else "OBSERVED")
+            return fact(tag, "PLAYER", state, ("播报ID", value("broadcast_id")), ("证据", value("evidence"))) + judgement("RESULT", "播放器", status, ("播报ID", value("broadcast_id")))
+        if event_name == "CASE_RESULT":
+            tag = "RESULT"
+            case = raw.get("case", {}) if isinstance(raw.get("case", {}), Mapping) else {}
+            facts = case.get("facts", {}) if isinstance(case, Mapping) and isinstance(case.get("facts", {}), Mapping) else {}
+            wake = facts.get("wake", {}) if isinstance(facts.get("wake", {}), Mapping) else {}
+            asr = facts.get("asr", {}) if isinstance(facts.get("asr", {}), Mapping) else {}
+            online = facts.get("online", {}) if isinstance(facts.get("online", {}), Mapping) else {}
+            player = facts.get("player", {}) if isinstance(facts.get("player", {}), Mapping) else {}
+            player_status = str(player.get("status", player.get("device_playback_status", ""))).upper()
+            if player_status in {"COMPLETED", "END", "OBSERVED"}:
+                player_status = "PASS"
+            elif player_status in {"REQUESTED", "RUNNING", "UNVERIFIED", ""}:
+                player_status = "OBSERVED"
+            return judgement("RESULT", "本轮", known.get("status", case.get("reviewed_status", case.get("raw_status", ""))), ("唤醒", wake.get("status", "")), ("离线识别", asr.get("status", facts.get("command_status", ""))), ("在线识别", online.get("status", facts.get("online_status", ""))), ("播放器", player_status), ("异常", known.get("reason", "")), ("case_id", case_id))
+        if event_name == "OBSERVED_TAGS":
+            tag_items = raw_items or details.get("raw_tags", [])
+            lines: list[str] = []
+            channel = str(value("channel", default="DEVICE")).upper()
+            for item in tag_items if isinstance(tag_items, list) else []:
+                if not isinstance(item, Mapping):
+                    continue
+                key = str(item.get("tag_name") or "DEVICE").upper()
+                if key == "KEYWORD" and channel in {"COMMAND", "OFFLINE_RECOGNITION"}:
+                    key = "OFFLINE_ASR"
+                elif key == "INTENT" and channel in {"COMMAND", "OFFLINE_RECOGNITION"}:
+                    key = "OFFLINE_INTENT"
+                if key not in LOG_FACT_KEYS:
+                    key = "DEVICE_" + key
+                lines.append(fact("DEVICE", key, item.get("raw_value"), ("证据", item.get("evidence", ""))))
+            for name, item in normalized.items():
+                key = str(name).upper()
+                if key in LOG_FACT_KEYS:
+                    lines.append(fact("DEVICE", key, item))
+            tool_status = value("tool_status", "status", default="")
+            if tool_status:
+                lines.append(judgement("RESULT", channel, tool_status, ("原因", value("tool_reason", "reason"))))
+            return "".join(lines) or fact("SYSTEM", "OBSERVATION", message)
+        if event_name == "ROUND_EXCEPTION_SUMMARY":
+            snapshot = raw if isinstance(raw, Mapping) else {}
+            counts = snapshot.get("exception_counts", {}) if isinstance(snapshot, Mapping) else {}
+            total = snapshot.get("exception_total", 0) if isinstance(snapshot, Mapping) else 0
+            line = suffix(("轮次", snapshot.get("completed_cases", known.get("round", ""))), ("当前", f"{snapshot.get('current_case_id', case_id)}:{snapshot.get('current_status', known.get('status', ''))}"), ("累计异常", counts), ("异常总数", total))
+            return f"{known['time']} [SUMMARY] {line}\n\n"
+        if event_name.startswith("SERIAL_COMMAND") or event_name.startswith("PROFILE_RECOVERY"):
+            tag = "COMMAND"
+        elif event_name in {"TASK_ANOMALY", "STICKY_FATAL", "TOOL_EXCEPTION"}:
+            tag = "ERROR"
+        if tag not in LOG_NODE_LABELS:
+            tag = "SYSTEM"
+        raw_hint = ""
+        if event_name == "OBSERVED_TAGS":
+            raw_hint = json.dumps({"normalized": normalized, **details}, ensure_ascii=False, sort_keys=True, default=str)
+        elif raw:
+            if event_name in {"RAW_RECOGNITION", "RECOGNITION_RAW_RECORDED"}:
+                raw_hint = raw
+            elif event_name in {"OBSERVATION_EVIDENCE", "TOOL_RECORD", "EXTERNAL_TOOL_OUTPUT"}:
+                raw_hint = raw.get("events", raw.get("output", raw)) if isinstance(raw, Mapping) else (raw_text or raw)
+        error_code = value("code", "anomaly_code", default="")
+        if event_name in {"TASK_STARTED", "TASK_CONFIG"}:
+            return fact("SYSTEM", "TASK", message, ("设备", value("device")), ("端口", value("port_role")))
+        if event_name == "DEVICE_RESTART_DETECTED":
+            restart_value = value("restart_line", "raw_line", default="detected")
+            return fact("DEVICE", "RESTART", restart_value, ("epoch", known.get("epoch", "")), ("证据", value("evidence"))) + judgement("RESULT", "重启恢复", "RETRY", ("epoch", known.get("epoch", "")))
+        if event_name == "PROFILE_RECOVERY_WAIT_INIT":
+            return fact("DEVICE", "INIT_WAIT", "waiting", ("超时", value("timeout_s", default="")))
+        if event_name == "PROFILE_RECOVERY_STABILIZING":
+            return fact("DEVICE", "INIT_STABLE", "waiting", ("耗时", value("elapsed_ms", default="")))
+        if event_name.startswith("SERIAL_COMMAND") or event_name.startswith("PROFILE_RECOVERY"):
+            if event_name == "PROFILE_RECOVERY_CANCELLED":
+                return judgement("RESULT", "重启恢复", "CANCELLED", ("原因", known.get("reason", "")))
+            if event_name == "PROFILE_RECOVERY_RESULT":
+                return judgement("RESULT", "初始化", known.get("status", ""), ("原因", known.get("reason", "")))
+            command = value("command", default="initialization")
+            reply = value("reply", "direct_reply", default="")
+            attempt = f"{value('attempt')}/{value('max_attempts')}" if value("attempt") else ""
+            command_text = str(command)
+            if "log" in command_text.lower() and any(char.isdigit() for char in command_text):
+                key = "LOG_LEVEL"
+                command_value = command_text.rsplit(None, 1)[-1]
+            else:
+                key = "COMMAND"
+                command_value = command_text
+            lines = [fact("COMMAND", key, command_value, ("尝试", attempt), ("回执", reply), ("证据", value("evidence")))]
+            status = judgement_status(known.get("status", ""))
+            if status or error_code:
+                name = "日志等级" if key == "LOG_LEVEL" else "初始化"
+                lines.append(judgement("RESULT", name, status or ("FAIL" if error_code else "-"), ("异常", error_code), ("原因", known.get("reason", ""))))
+            return "".join(lines)
+        if event_name in {"TASK_FINISHED"}:
+            summary = raw if isinstance(raw, Mapping) else {}
+            return judgement("RESULT", "任务", known.get("status", ""), ("完成", summary.get("completed", "")), ("通过", summary.get("counts", {}).get("PASS", "") if isinstance(summary.get("counts"), Mapping) else ""), ("异常", summary.get("exception_total", "")), ("原因", known.get("reason", "")))
+        line = suffix(("状态", known.get("status", "")), ("异常", error_code), ("原因", known.get("reason", "")), ("重试", f"{value('attempt')}/{value('max_attempts')}" if value("attempt") else ""), ("证据", known.get("evidence", "")), ("说明", message))
+        if raw_text and event_name in {"EXTERNAL_TOOL_OUTPUT", "TOOL_RECORD"} and raw_text not in line:
+            line += f" 原始输出={raw_text}"
+        return f"{known['time']} [{tag}] {line}\n"
 
     def configure(self, payload: Mapping[str, Any]) -> None:
         """Record a non-sensitive resolved configuration in the sole tool log."""
         self.emit("TASK_CONFIG", message="已记录任务解析配置。", phase="preflight", raw=dict(payload))
+
+    def emit_fact(
+        self,
+        key: str,
+        value: Any,
+        *,
+        tag: str = "DEVICE",
+        evidence: Any = "",
+        **fields: Any,
+    ) -> None:
+        """Emit one fixed raw fact; regex text never belongs in tool.log."""
+        normalized_key = str(key or "").strip().upper()
+        if normalized_key not in LOG_FACT_KEYS:
+            raise ValueError(f"unsupported tool.log fact key: {key}")
+        tag_name = str(tag or "DEVICE").upper()
+        if tag_name not in {"ACTION", "DEVICE", "ONLINE", "PLAYER", "COMMAND", "SYSTEM"}:
+            raise ValueError(f"unsupported tool.log fact tag: {tag}")
+        self.emit("FIXED_FACT", tag=tag, fact_key=normalized_key, fact_value=value, evidence=evidence, **fields)
+
+    def emit_judgement(self, name: str, status: str, *, tag: str = "RESULT", **fields: Any) -> None:
+        """Emit a separate tool-derived judgement line after a raw fact."""
+        if str(tag or "RESULT").upper() not in {"RESULT", "ERROR", "SYSTEM"}:
+            raise ValueError(f"unsupported tool.log judgement tag: {tag}")
+        if not str(name or "").strip():
+            raise ValueError("tool.log judgement name cannot be empty")
+        self.emit("FIXED_JUDGEMENT", tag=tag, judgement_name=name, judgement_status=status, **fields)
 
     def emit(self, event: str, *, message: str = "", level: str = "INFO", task_log: bool = True, **fields: Any) -> None:
         """Append one fixed-field execution block to ``tool.log``.
@@ -400,6 +726,7 @@ class TaskArtifacts:
         judgement: ToolJudgement | None = None,
         level: str = "INFO",
         task_log: bool = True,
+        human_log: bool = True,
         **fields: Any,
     ) -> dict[str, Any]:
         """同时保存设备原始标签和工具侧判断，并镜像关键行。"""
@@ -423,7 +750,8 @@ class TaskArtifacts:
                 "duration_ms": judgement.duration_ms,
                 "evidence_refs": list(judgement.evidence_refs),
             })
-        self.emit(event, message=message, level=level, task_log=task_log, **event_fields)
+        if human_log:
+            self.emit(event, message=message, level=level, task_log=task_log, **event_fields)
         return event_fields
 
     @staticmethod
@@ -451,6 +779,10 @@ class TaskArtifacts:
     @property
     def cases_frozen(self) -> bool:
         return self._cases_frozen
+
+    def case_metadata(self, case_id: str) -> dict[str, Any]:
+        """Return the frozen human-facing metadata for one case."""
+        return dict(self._case_metadata.get(str(case_id), {}))
 
     def require_cases_frozen(self, action: str) -> None:
         """Prevent a project adapter from changing its corpus after device I/O."""
@@ -510,6 +842,14 @@ class TaskArtifacts:
                     "profile_version": profile_version,
                     "profile_sha256": profile_sha256,
                 } | {name: self._csv_value(value) for name, value in row.items()})
+                case_id = str(row.get("case_id") or "").strip()
+                if case_id and case_id not in self._case_positions:
+                    self._case_positions[case_id] = order
+                    self._case_metadata[case_id] = {
+                        "scenario": row.get("scenario", ""),
+                        "input_text": row.get("input_text", ""),
+                        "audio_path": row.get("audio_path", ""),
+                    }
             self._cases.flush()
         self._cases_frozen = True
         self._frozen_case_count = len(rows)
