@@ -127,7 +127,10 @@ class DeviceProfile:
             raise ProfileError("commands must be a list")
         if "wake_words" in payload and not isinstance(payload["wake_words"], list):
             raise ProfileError("wake_words must be a list")
-        for category, value in (payload.get("observations", {}) or {}).items():
+        raw_observations = payload.get("observations", {}) or {}
+        if not isinstance(raw_observations, Mapping):
+            raise ProfileError("observations must be an object")
+        for category, value in raw_observations.items():
             if not isinstance(value, Mapping):
                 continue
             fact_map = value.get("fact_map", {})
