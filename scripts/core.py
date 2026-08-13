@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-import os
 import shutil
 import threading
 import time
@@ -45,12 +44,6 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def atomic_json(path: Path, payload: Any) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
 
 
 @dataclass(frozen=True)
@@ -216,7 +209,39 @@ class StopSupervisor:
 
 
 class TaskArtifacts:
-    """Incrementally writes standard evidence without creating merged serial logs."""
+    """The four-artifact result ledger used by every new lstest task.
+
+    ``serial_logs/`` is the continuous device-side fact source.  ``tool.log``
+    is the single human-readable execution ledger.  ``results.csv`` contains
+    one final row per logical case, and ``cases.csv`` freezes the input order
+    before any device action.  No derived JSON, per-tool log, or summary file
+    is created for new tasks.
+    """
+
+    TOOL_FIELDS = (
+        "time", "level", "event", "task_id", "epoch", "round", "case_id",
+        "phase", "source", "device", "port_role", "action_id", "broadcast_id",
+        "correlation_id", "status", "reason", "attempt", "max_attempts",
+        "elapsed_ms", "rule_id", "expected", "actual", "raw", "normalized",
+        "handling", "evidence", "message", "details",
+    )
+    RESULT_FIELDS = (
+        "round", "case_id", "started_at", "ended_at", "epoch", "scenario",
+        "input_text", "audio_path", "audio_sha256", "broadcast_id", "wake_attempts",
+        "wake_raw", "offline_attempts", "offline_keyword_raw", "offline_intent_raw",
+        "online_request_id", "online_response_id", "online_raw_response",
+        "player_status", "device_playback_status", "command_audio_duration_ms",
+        "e2e_latency_ms", "processing_latency_ms", "recognition_latency_ms",
+        "correlation_valid", "raw_exact_status", "semantic_status", "checks_summary",
+        "raw_status", "reviewed_status", "final_status", "anomaly_codes", "reason",
+        "evidence", "facts_json",
+    )
+    CASE_FIELDS = (
+        "case_order", "case_id", "scenario", "input_text", "audio_path", "audio_sha256",
+        "expected_wake_raw", "expected_offline_raw", "expected_online_raw",
+        "accepted_raw_variants", "source_file", "source_sha256", "random_seed",
+        "profile_version", "profile_sha256",
+    )
 
     def __init__(self, result_root: Path, task_slug: str, detail_fields: Sequence[str] = ()):
         stamp = now_dt().strftime("%Y%m%d_%H%M%S")
@@ -227,78 +252,143 @@ class TaskArtifacts:
             candidate = Path(f"{base}_{suffix:02d}")
             suffix += 1
         self.run_dir = candidate
-        for name in ("serial_logs", "evidence", "tool_logs"):
-            (self.run_dir / name).mkdir(parents=True, exist_ok=False)
-        self.task_log_path = self.run_dir / "task.log"
-        self.events_path = self.run_dir / "task_events.jsonl"
-        self.errors_path = self.run_dir / "errors.log"
-        self.progress_path = self.run_dir / "progress.json"
+        (self.run_dir / "serial_logs").mkdir(parents=True, exist_ok=False)
+        self.task_id = self.run_dir.name
+        self.tool_log_path = self.run_dir / "tool.log"
         self.results_path = self.run_dir / "results.csv"
-        self.summary_json = self.run_dir / "summary_final.json"
-        self.summary_md = self.run_dir / "summary_final.md"
+        self.cases_path = self.run_dir / "cases.csv"
         self.stop = StopSupervisor(self.run_dir / "STOP")
         self._lock = threading.RLock()
-        self._task = self.task_log_path.open("a", encoding="utf-8")
-        self._events = self.events_path.open("a", encoding="utf-8")
-        self._errors = self.errors_path.open("a", encoding="utf-8")
-        self._csv = None
-        self._writer = None
-        fields = list(detail_fields)
-        if fields:
-            self._csv = self.results_path.open("w", encoding="utf-8-sig", newline="")
-            self._writer = csv.DictWriter(self._csv, fieldnames=fields, extrasaction="ignore")
-            self._writer.writeheader()
-            self._csv.flush()
+        self._tool = self.tool_log_path.open("a", encoding="utf-8")
+        result_fields = list(dict.fromkeys([*self.RESULT_FIELDS, *detail_fields]))
+        self._csv = self.results_path.open("w", encoding="utf-8-sig", newline="")
+        self._writer = csv.DictWriter(self._csv, fieldnames=result_fields, extrasaction="ignore")
+        self._writer.writeheader()
+        self._csv.flush()
+        self._cases = self.cases_path.open("w", encoding="utf-8-sig", newline="")
+        self._cases_writer = csv.DictWriter(self._cases, fieldnames=self.CASE_FIELDS, extrasaction="ignore")
+        self._cases_writer.writeheader()
+        self._cases.flush()
+        self._cases_frozen = False
+        self._frozen_case_count = 0
         self.counts: dict[str, int] = {}
-        # This task-scoped state is not owned by a round or serial connection,
-        # so device reconnects/reboots never reset the accumulated count.
         self.exception_counts: dict[str, int] = {}
         self.anomaly_counts: dict[str, int] = {}
         self.completed_cases = 0
         self.sticky: list[dict[str, Any]] = []
         self.capabilities: dict[str, dict[str, Any]] = {}
+        self.checks: dict[str, list[dict[str, Any]]] = {}
+        self.current_epoch = 0
+        self._epoch_listeners: list[Any] = []
+        self.health_policy: dict[str, Any] = {}
+        self.health_streaks: dict[str, int] = {}
         self._closers: list[tuple[str, Any]] = []
+        self._final_summary: dict[str, Any] | None = None
         self.closed = False
+        self.emit(
+            "TASK_STARTED",
+            message="已创建四类结果产物：串口日志、工具日志、结果表和用例表。",
+            task_slug=task_slug,
+            result_directory=str(self.run_dir),
+            result_artifacts=["serial_logs/", "tool.log", "results.csv", "cases.csv"],
+        )
+
+    @staticmethod
+    def _text(value: Any) -> str:
+        if value is None or value == "":
+            return "-"
+        if isinstance(value, str):
+            return value.replace("\r\n", "\\n").replace("\n", "\\n")
+        if isinstance(value, (Mapping, list, tuple, set)):
+            return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        return str(value)
+
+    def _tool_block(self, event: str, level: str, message: str, fields: Mapping[str, Any]) -> str:
+        values = dict(fields)
+        port = values.pop("port", "")
+        role = values.pop("role", "")
+        port_role = values.pop("port_role", "") or "/".join(item for item in (str(port), str(role)) if item)
+        evidence = values.pop("evidence", values.pop("evidence_refs", ""))
+        raw = values.pop("raw", values.pop("raw_tags", values.pop("raw_line", "")))
+        normalized = values.pop("normalized", "")
+        expected = values.pop("expected", "")
+        actual = values.pop("actual", "")
+        known = {
+            "time": now_human(),
+            "level": level.upper(),
+            "event": event,
+            "task_id": self.task_id,
+            "epoch": values.pop("epoch", self.current_epoch),
+            "round": values.pop("round", values.pop("completed_cases", "")),
+            "case_id": values.pop("case_id", ""),
+            "phase": values.pop("phase", ""),
+            "source": values.pop("source", ""),
+            "device": values.pop("device", ""),
+            "port_role": port_role,
+            "action_id": values.pop("action_id", ""),
+            "broadcast_id": values.pop("broadcast_id", ""),
+            "correlation_id": values.pop("correlation_id", values.pop("query_id", values.pop("request_id", ""))),
+            "status": values.pop("status", values.pop("tool_status", "")),
+            "reason": values.pop("reason", values.pop("tool_reason", "")),
+            "attempt": values.pop("attempt", ""),
+            "max_attempts": values.pop("max_attempts", ""),
+            "elapsed_ms": values.pop("elapsed_ms", values.pop("duration_ms", "")),
+            "rule_id": values.pop("rule_id", ""),
+            "expected": expected,
+            "actual": actual,
+            "raw": raw,
+            "normalized": normalized,
+            "handling": values.pop("handling", ""),
+            "evidence": evidence,
+            "message": message,
+            "details": values,
+        }
+        return "\n".join(
+            ["=" * 78, *[f"{name}: {self._text(known[name])}" for name in self.TOOL_FIELDS], ""]
+        ) + "\n"
 
     def configure(self, payload: Mapping[str, Any]) -> None:
-        atomic_json(self.run_dir / "task_config.json", {**payload, "started_at": now_iso(), "result_directory": str(self.run_dir)})
-
-    def write_tool_log(self, name: str, content: str, *, append: bool = True) -> Path:
-        """保存播放器、在线客户端或其他工具的原始输出。"""
-        safe_name = Path(name).name
-        path = self.run_dir / "tool_logs" / safe_name
-        mode = "a" if append else "w"
-        with self._lock:
-            with path.open(mode, encoding="utf-8", errors="replace") as handle:
-                handle.write(content)
-                if content and not content.endswith("\n"):
-                    handle.write("\n")
-        return path
-
-    def append_tool_jsonl(self, name: str, payload: Mapping[str, Any]) -> Path:
-        """线程安全地追加一条结构化工具证据。"""
-        safe_name = Path(name).name
-        path = self.run_dir / "tool_logs" / safe_name
-        line = json.dumps(dict(payload), ensure_ascii=False, separators=(",", ":"))
-        with self._lock:
-            with path.open("a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
-        return path
+        """Record a non-sensitive resolved configuration in the sole tool log."""
+        self.emit("TASK_CONFIG", message="已记录任务解析配置。", phase="preflight", raw=dict(payload))
 
     def emit(self, event: str, *, message: str = "", level: str = "INFO", task_log: bool = True, **fields: Any) -> None:
-        payload = {"at": now_iso(), "event": event, "level": level, "message": message, **fields}
-        line = json.dumps(payload, ensure_ascii=False)
+        """Append one fixed-field execution block to ``tool.log``.
+
+        ``task_log`` remains a compatibility flag for existing adapters.  Raw
+        serial line mirroring is intentionally suppressed because continuous
+        device output belongs only in ``serial_logs/``.
+        """
+        if self.closed:
+            return
+        if event == "SERIAL_LINE" and not task_log:
+            return
+        block = self._tool_block(event, level, message or event, fields)
         with self._lock:
-            self._events.write(line + "\n")
-            self._events.flush()
-            if level in {"ERROR", "CRITICAL"}:
-                self._errors.write(line + "\n")
-                self._errors.flush()
-            if task_log:
-                text = f"{now_human()} [{level}] {message or event}"
-                self._task.write(text + "\n")
-                self._task.flush()
-                print(text, flush=True)
+            self._tool.write(block)
+            self._tool.flush()
+        if task_log:
+            print(f"{now_human()} [{level.upper()}] {message or event}", flush=True)
+
+    def write_tool_log(self, name: str, content: str, *, append: bool = True) -> Path:
+        """Compatibility bridge: external output is now a named tool.log event."""
+        self.emit(
+            "EXTERNAL_TOOL_OUTPUT",
+            message=f"已记录外部工具输出：{Path(name).name}。",
+            source=Path(name).name,
+            raw=content,
+            handling="append" if append else "replace-request-mapped-to-single-ledger",
+        )
+        return self.tool_log_path
+
+    def append_tool_jsonl(self, name: str, payload: Mapping[str, Any]) -> Path:
+        """Compatibility bridge for former per-tool JSONL writers."""
+        self.emit(
+            "TOOL_RECORD",
+            message=f"已迁移专项记录：{Path(name).name}。",
+            source=Path(name).name,
+            raw=dict(payload),
+        )
+        return self.tool_log_path
 
     def emit_observation(
         self,
@@ -336,18 +426,310 @@ class TaskArtifacts:
         self.emit(event, message=message, level=level, task_log=task_log, **event_fields)
         return event_fields
 
+    @staticmethod
+    def _flatten_mapping(value: Any) -> dict[str, Any]:
+        return dict(value) if isinstance(value, Mapping) else {}
+
+    @staticmethod
+    def _join_codes(values: Iterable[Any]) -> str:
+        flattened: list[str] = []
+        for value in values:
+            if isinstance(value, str):
+                flattened.append(value)
+            elif isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray, Mapping)):
+                flattened.extend(str(item) for item in value)
+            elif value is not None:
+                flattened.append(str(value))
+        return ";".join(sorted({item for item in flattened if item.strip()}))
+
+    @staticmethod
+    def _csv_value(value: Any) -> Any:
+        if isinstance(value, (Mapping, list, tuple, set)):
+            return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        return value
+
+    @property
+    def cases_frozen(self) -> bool:
+        return self._cases_frozen
+
+    def require_cases_frozen(self, action: str) -> None:
+        """Prevent a project adapter from changing its corpus after device I/O."""
+        if not self._cases_frozen:
+            message = f"执行 {action} 前必须先冻结 cases.csv。"
+            self.emit("CASES_NOT_FROZEN", level="ERROR", message=message, phase="preflight", action_id=action)
+            raise RuntimeError(message)
+
+    def freeze_cases(
+        self,
+        cases: Iterable[CaseSpec | Mapping[str, Any]],
+        *,
+        random_seed: Any = "",
+        profile_version: Any = "",
+        profile_sha256: Any = "",
+    ) -> int:
+        """Freeze the final case order before the first device action."""
+        if self._cases_frozen:
+            raise RuntimeError("cases.csv is already frozen for this task")
+        rows = list(cases)
+        with self._lock:
+            for order, value in enumerate(rows, start=1):
+                if isinstance(value, CaseSpec):
+                    metadata = dict(value.metadata)
+                    row = {
+                        "case_id": value.case_id,
+                        "scenario": metadata.get("scenario") or value.domain or "",
+                        "input_text": value.text,
+                        "audio_path": value.audio_path or "",
+                        "expected_offline_raw": metadata.get("expected_offline_raw", {}),
+                        "expected_online_raw": metadata.get("expected_online_raw", {}),
+                        "expected_wake_raw": metadata.get("expected_wake_raw", {}),
+                        "accepted_raw_variants": metadata.get("accepted_raw_variants", {}),
+                        "source_file": metadata.get("source_file", ""),
+                        "source_sha256": metadata.get("source_sha256", ""),
+                    }
+                else:
+                    raw = dict(value)
+                    row = {
+                        "case_id": raw.get("case_id", ""),
+                        "scenario": raw.get("scenario", raw.get("domain", "")),
+                        "input_text": raw.get("input_text", raw.get("text", "")),
+                        "audio_path": raw.get("audio_path", ""),
+                        "expected_wake_raw": raw.get("expected_wake_raw", {}),
+                        "expected_offline_raw": raw.get("expected_offline_raw", {}),
+                        "expected_online_raw": raw.get("expected_online_raw", {}),
+                        "accepted_raw_variants": raw.get("accepted_raw_variants", {}),
+                        "source_file": raw.get("source_file", ""),
+                        "source_sha256": raw.get("source_sha256", ""),
+                    }
+                audio_path = Path(str(row["audio_path"])) if row["audio_path"] else None
+                self._cases_writer.writerow({
+                    "case_order": order,
+                    **row,
+                    "audio_sha256": sha256_file(audio_path) if audio_path and audio_path.is_file() else "",
+                    "random_seed": random_seed,
+                    "profile_version": profile_version,
+                    "profile_sha256": profile_sha256,
+                } | {name: self._csv_value(value) for name, value in row.items()})
+            self._cases.flush()
+        self._cases_frozen = True
+        self._frozen_case_count = len(rows)
+        self.emit(
+            "CASES_FROZEN",
+            message=f"已冻结本次压测用例，共 {len(rows)} 条。",
+            phase="preflight",
+            status="PASS",
+            raw={"case_count": len(rows), "random_seed": random_seed, "profile_version": profile_version},
+        )
+        return len(rows)
+
+    def set_epoch(self, epoch: int, *, reason: str = "") -> None:
+        next_epoch = max(0, int(epoch))
+        if next_epoch == self.current_epoch:
+            return
+        previous = self.current_epoch
+        self.current_epoch = next_epoch
+        self.emit(
+            "SESSION_EPOCH_CHANGED",
+            level="WARN" if previous else "INFO",
+            message=f"设备会话 epoch 已切换为 {next_epoch}。",
+            epoch=next_epoch,
+            reason=reason,
+            raw={"previous_epoch": previous, "current_epoch": next_epoch},
+        )
+        for listener in tuple(self._epoch_listeners):
+            try:
+                listener(next_epoch, reason=reason)
+            except Exception as error:
+                self.record_anomaly(
+                    "EPOCH_LISTENER_EXCEPTION",
+                    "设备会话切换通知失败。",
+                    error=f"{type(error).__name__}: {error}",
+                )
+
+    def register_epoch_listener(self, listener: Any) -> None:
+        if callable(listener):
+            self._epoch_listeners.append(listener)
+
+    def add_check(
+        self,
+        case_id: str,
+        name: str,
+        status: str,
+        *,
+        required: bool = True,
+        reason: str = "",
+        evidence: Iterable[str] = (),
+        **fields: Any,
+    ) -> dict[str, Any]:
+        """Register a required/optional check used to derive a case status."""
+        record = {
+            "name": str(name),
+            "status": str(status).upper(),
+            "required": bool(required),
+            "reason": reason,
+            "evidence": [str(item) for item in evidence],
+            **fields,
+        }
+        self.checks.setdefault(case_id, []).append(record)
+        self.emit(
+            "CASE_CHECK",
+            level="ERROR" if record["status"] == "FAIL" else "INFO",
+            message=f"用例检查 {name}: {record['status']}。",
+            case_id=case_id,
+            status=record["status"],
+            reason=reason,
+            evidence=record["evidence"],
+            raw={"required": required, **fields},
+        )
+        return record
+
+    def derive_case_status(self, case_id: str, fallback: str) -> tuple[str, list[dict[str, Any]]]:
+        checks = list(self.checks.pop(case_id, ()))
+        required = [item for item in checks if item["required"]]
+        states = {item["status"] for item in required}
+        if "FAIL" in states:
+            return "FAIL", checks
+        if "BLOCKED" in states:
+            return "BLOCKED", checks
+        if required and states <= {"PASS"}:
+            return "PASS", checks
+        return fallback, checks
+
+    def configure_health_policy(self, policy: Mapping[str, Any] | None) -> None:
+        self.health_policy = dict(policy or {})
+        self.emit("HEALTH_POLICY", message="已加载连续异常健康策略。", raw=self.health_policy)
+
+    def record_health(self, category: str, *, failed: bool, case_id: str = "", **fields: Any) -> dict[str, Any]:
+        """Track continuous failures without stopping a runnable pressure task."""
+        key = str(category).upper()
+        count = self.health_streaks.get(key, 0) + 1 if failed else 0
+        self.health_streaks[key] = count
+        rule = self._flatten_mapping(self.health_policy.get(key) or self.health_policy.get(key.lower()))
+        threshold = int(rule.get("threshold", 0) or 0)
+        crossed = bool(failed and threshold > 0 and count >= threshold)
+        record = {"category": key, "failed": failed, "consecutive_count": count, "threshold": threshold, "crossed": crossed}
+        if crossed:
+            handling = str(rule.get("handling") or "snapshot_and_continue")
+            snapshot = {
+                "case_id": case_id,
+                "epoch": self.current_epoch,
+                "category": key,
+                "consecutive_count": count,
+                "evidence": fields.get("evidence") or fields.get("evidence_refs") or [],
+            }
+            self.record_anomaly(
+                f"HEALTH_{key}_THRESHOLD",
+                f"连续 {count} 次 {key} 达到 profile 阈值。",
+                case_id=case_id,
+                handling=handling,
+                **fields,
+            )
+            self.emit(
+                "HEALTH_POLICY_TRIGGERED",
+                level="WARN",
+                message=f"连续异常达到阈值，执行策略：{handling}。",
+                case_id=case_id,
+                handling=handling,
+                raw=record,
+            )
+            self.emit(
+                "HEALTH_POLICY_SNAPSHOT",
+                level="WARN",
+                message="连续异常已记录当前证据快照。",
+                case_id=case_id,
+                phase="health_policy",
+                handling=handling,
+                raw=snapshot,
+            )
+            if "session" in handling or "recover" in handling:
+                self.emit(
+                    "HEALTH_SESSION_RECOVERY_REQUESTED",
+                    level="WARN",
+                    message="健康策略请求项目适配器恢复当前会话后继续执行。",
+                    case_id=case_id,
+                    phase="health_policy",
+                    handling=handling,
+                    raw=snapshot,
+                )
+            if bool(rule.get("stop", False)):
+                self.stop.request(f"HEALTH_{key}_THRESHOLD")
+        return record
+
     def record_case(self, result: CaseResult) -> None:
-        status = result.reviewed_status or result.raw_status
+        initial_status = result.reviewed_status or result.raw_status
+        status, checks = self.derive_case_status(result.case_id, initial_status)
+        if status != initial_status:
+            result.reviewed_status = status
+            result.reason = "; ".join(filter(None, [result.reason, "required_check_matrix"]))
+        result.facts = {**result.facts, "checks": checks, "epoch": self.current_epoch}
         self.counts[status] = self.counts.get(status, 0) + 1
         self.completed_cases += 1
         if status not in NORMAL_CASE_STATUSES:
             self.exception_counts[status] = self.exception_counts.get(status, 0) + 1
+        facts = dict(result.facts)
+        wake = self._flatten_mapping(facts.get("wake"))
+        asr = self._flatten_mapping(facts.get("asr"))
+        online = self._flatten_mapping(facts.get("online"))
+        player = self._flatten_mapping(facts.get("player"))
+        timing = self._flatten_mapping(facts.get("timing"))
+        correlation = self._flatten_mapping(facts.get("correlation"))
+        associations = list(facts.get("broadcast_recognition_associations", ()))
+        raw_codes = facts.get("anomaly_codes", ())
+        if isinstance(raw_codes, str):
+            raw_codes = [raw_codes]
+        anomaly_codes = [*raw_codes, *[item.get("reason", "") for item in associations if isinstance(item, Mapping) and item.get("status") != "PASS"]]
+        check_summary = [{"name": item["name"], "status": item["status"], "required": item["required"]} for item in checks]
         with self._lock:
-            if self._writer is not None:
-                self._writer.writerow({"case_id": result.case_id, "raw_status": result.raw_status, "reviewed_status": result.reviewed_status or "", "reason": result.reason, "facts": json.dumps(result.facts, ensure_ascii=False), "evidence": json.dumps(result.evidence, ensure_ascii=False)})
-            if self._csv is not None:
-                self._csv.flush()
-        self.emit("CASE_RESULT", message=f"用例 {result.case_id}: {status}；{result.reason}".rstrip("；"), case=result.to_dict())
+            row = {
+                "round": self.completed_cases,
+                "case_id": result.case_id,
+                "started_at": facts.get("started_at", ""),
+                "ended_at": now_iso(),
+                "epoch": self.current_epoch,
+                "scenario": facts.get("scenario", ""),
+                "input_text": facts.get("input_text", ""),
+                "audio_path": facts.get("audio_path", ""),
+                "audio_sha256": facts.get("audio_sha256", ""),
+                "broadcast_id": facts.get("broadcast_id", player.get("broadcast_id", "")),
+                "wake_attempts": wake.get("attempts", facts.get("wake_attempts", "")),
+                "wake_raw": wake.get("raw", wake.get("keyword", "")),
+                "offline_attempts": asr.get("attempts", facts.get("offline_attempts", "")),
+                "offline_keyword_raw": asr.get("keyword", ""),
+                "offline_intent_raw": asr.get("intent", ""),
+                "online_request_id": online.get("request_id", correlation.get("request_id", "")),
+                "online_response_id": online.get("response_id", correlation.get("response_id", "")),
+                "online_raw_response": online.get("raw", online.get("text", "")),
+                "player_status": player.get("status", ""),
+                "device_playback_status": player.get("device_playback_status", ""),
+                "command_audio_duration_ms": timing.get("command_audio_duration_ms", ""),
+                "e2e_latency_ms": timing.get("e2e_latency_ms", ""),
+                "processing_latency_ms": timing.get("processing_latency_ms", ""),
+                "recognition_latency_ms": timing.get("recognition_latency_ms", ""),
+                "correlation_valid": correlation.get("valid", correlation.get("correlation_valid", "")),
+                "raw_exact_status": facts.get("raw_exact_status", ""),
+                "semantic_status": facts.get("semantic_status", ""),
+                "checks_summary": json.dumps(check_summary, ensure_ascii=False),
+                "raw_status": result.raw_status,
+                "reviewed_status": result.reviewed_status or "",
+                "final_status": status,
+                "anomaly_codes": self._join_codes(anomaly_codes),
+                "reason": result.reason,
+                "evidence": self._join_codes(result.evidence),
+                "facts_json": json.dumps(facts, ensure_ascii=False, sort_keys=True, default=str),
+            }
+            self._writer.writerow({name: self._csv_value(value) for name, value in row.items()})
+            self._csv.flush()
+        self.emit(
+            "CASE_RESULT",
+            message=f"用例 {result.case_id}: {status}；{result.reason}".rstrip("；"),
+            case_id=result.case_id,
+            round=self.completed_cases,
+            epoch=self.current_epoch,
+            status=status,
+            reason=result.reason,
+            raw={"checks": checks, "case": result.to_dict()},
+            evidence=result.evidence,
+        )
         self._record_round_exception_summary(result.case_id, status)
 
     def _record_round_exception_summary(self, case_id: str, status: str) -> None:
@@ -371,12 +753,7 @@ class TaskArtifacts:
             f"anomaly_total={snapshot['anomaly_total']} "
             f"sticky={json.dumps(snapshot['sticky_counts'], ensure_ascii=False)}"
         )
-        self.emit("ROUND_EXCEPTION_SUMMARY", message=message, **snapshot)
-        # One blank line separates adjacent rounds in the human-readable tool log.
-        self.write_tool_log(
-            "exception_summary.log",
-            f"{now_human()} {message}\n{json.dumps(snapshot, ensure_ascii=False, sort_keys=True)}\n\n",
-        )
+        self.emit("ROUND_EXCEPTION_SUMMARY", message=message, round=self.completed_cases, raw=snapshot)
 
     def _sticky_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -386,18 +763,18 @@ class TaskArtifacts:
         return dict(sorted(counts.items()))
 
     def update_progress(self, *, completed: int, target: int | None = None, **fields: Any) -> None:
-        payload = {
-            "updated_at": now_iso(),
-            "completed": completed,
-            "target": target,
-            "exception_counts": dict(sorted(self.exception_counts.items())),
-            "exception_total": sum(self.exception_counts.values()),
-            "anomaly_counts": dict(sorted(self.anomaly_counts.items())),
-            "anomaly_total": sum(self.anomaly_counts.values()),
-            "sticky_counts": self._sticky_counts(),
-            **fields,
-        }
-        atomic_json(self.progress_path, payload)
+        self.emit(
+            "TASK_PROGRESS",
+            message=f"当前进度：{completed}/{target if target is not None else '-'}。",
+            round=completed,
+            raw={
+                "completed": completed,
+                "target": target,
+                "exception_counts": dict(sorted(self.exception_counts.items())),
+                "anomaly_counts": dict(sorted(self.anomaly_counts.items())),
+                **fields,
+            },
+        )
 
     def set_capability(self, name: str, status: str, reason: str = "", **fields: Any) -> None:
         self.capabilities[name] = {"status": status, "reason": reason, **fields}
@@ -430,20 +807,57 @@ class TaskArtifacts:
     def check_runtime(self) -> str | None:
         return self.stop.check(self.run_dir)
 
+    def _reconcile_results(self) -> dict[str, Any]:
+        """Recalculate final counts from the durable one-row-per-case ledger."""
+        with self._lock:
+            self._csv.flush()
+        counts: dict[str, int] = {}
+        rows: list[dict[str, str]] = []
+        with self.results_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                rows.append(row)
+                state = str(row.get("final_status") or "").upper()
+                if state:
+                    counts[state] = counts.get(state, 0) + 1
+        invalid = sum(counts.get(value, 0) for value in ("BLOCKED", "ABORTED", "SKIPPED"))
+        valid = max(0, len(rows) - invalid)
+        passed = counts.get("PASS", 0) + counts.get("EXPECTED", 0)
+        first_failure = next((row for row in rows if row.get("final_status") not in NORMAL_CASE_STATUSES), None)
+        return {
+            "rows": len(rows),
+            "counts": counts,
+            "invalid": invalid,
+            "valid": valid,
+            "passed": passed,
+            "first_failure": first_failure,
+            "success_rate": round((passed / valid) * 100, 4) if valid else None,
+        }
+
     def finalize(self, status: str, reason: str) -> dict[str, Any]:
         if self.closed:
-            return json.loads(self.summary_json.read_text(encoding="utf-8")) if self.summary_json.is_file() else {"status": status, "reason": reason}
-        # 先收尾设备资源，再生成最终汇总；否则 closer 失败无法进入 summary。
+            return dict(self._final_summary or {"status": status, "reason": reason})
         for name, closer in reversed(self._closers):
             try:
                 closer()
             except Exception as error:  # cleanup must remain visible, never hide the result
                 self.add_sticky("TOOL_EXCEPTION", f"资源收尾失败: {name}", resource=name, error=str(error))
+        reconciliation = self._reconcile_results()
+        self.counts = dict(reconciliation["counts"])
         final_status = status
         final_reason = reason
+        if self.counts.get("FAIL", 0) and final_status in {"PASS", "WARN", "PASS_WITH_WARNINGS"}:
+            final_status = "FAIL"
+            final_reason = f"{reason}；results.csv 含 {self.counts['FAIL']} 个 FAIL 轮次"
+        elif self.counts.get("BLOCKED", 0) and not self.counts.get("PASS", 0) and final_status in {"PASS", "WARN", "PASS_WITH_WARNINGS"}:
+            final_status = "BLOCKED"
+            final_reason = f"{reason}；results.csv 没有有效 PASS 轮次且含 BLOCKED"
         if self.sticky and final_status in {"PASS", "WARN"}:
             final_status = "FAIL"
             final_reason = f"{reason}；存在 sticky fatal: {self.sticky[-1].get('code', 'UNKNOWN')}"
+        completed_rows = reconciliation["rows"]
+        invalid = reconciliation["invalid"]
+        valid = reconciliation["valid"]
+        passed = reconciliation["passed"]
         summary = {
             "status": final_status,
             "reason": final_reason,
@@ -457,25 +871,31 @@ class TaskArtifacts:
             "capabilities": self.capabilities,
             "sticky_failures": self.sticky,
             "result_directory": str(self.run_dir),
+            "completed": completed_rows,
+            "planned": self._frozen_case_count,
+            "valid": valid,
+            "success_rate": reconciliation["success_rate"],
+            "first_failure": reconciliation["first_failure"],
         }
-        atomic_json(self.summary_json, summary)
-        self.summary_md.write_text(
-            f"# lstest 任务汇总\n\n- 状态：`{final_status}`\n- 原因：{final_reason}\n"
-            f"- 各状态数量：{json.dumps(self.counts, ensure_ascii=False)}\n"
-            f"- 全程累计异常：{json.dumps(summary['exception_counts'], ensure_ascii=False)}\n"
-            f"- 全程累计异常总数：{summary['exception_total']}\n"
-            f"- 全程累计异常事件：{json.dumps(summary['anomaly_counts'], ensure_ascii=False)}\n"
-            f"- 全程累计异常事件总数：{summary['anomaly_total']}\n"
-            f"- Sticky 严重异常：{json.dumps(summary['sticky_counts'], ensure_ascii=False)}\n"
-            f"- 证据目录：`{self.run_dir}`\n",
-            encoding="utf-8",
+        self.emit(
+            "TASK_FINISHED",
+            message=f"任务结束: {final_status}；{final_reason}",
+            status=final_status,
+            reason=final_reason,
+            raw=summary,
+            handling="results.csv counts reconciled before final status",
         )
-        self.emit("TASK_FINISHED", message=f"任务结束: {final_status}；{final_reason}", status=final_status, task_log=True)
-        for handle in (self._task, self._events, self._errors, self._csv):
+        for handle in (self._tool, self._csv, self._cases):
             if handle is not None:
                 handle.close()
+        self._final_summary = summary
         self.closed = True
         return summary
+
+    def serial_log_path(self, port: str, role: str | None) -> Path:
+        safe_port = str(port).replace("/", "_").replace("\\", "_")
+        safe_role = str(role or "unknown").replace("/", "_").replace("\\", "_")
+        return self.run_dir / "serial_logs" / f"serial_{safe_port}_{safe_role}.log"
 
 
 class DeviceRuntime:
@@ -498,6 +918,7 @@ class DeviceRuntime:
         *,
         initialization_timeout_s: float = 10.0,
         poll_interval_s: float = 0.1,
+        stable_for_s: float = 0.0,
     ) -> Any:
         """Continuously recover profile initialization after restart markers."""
         if self.restart_recovery_monitor is not None:
@@ -512,6 +933,7 @@ class DeviceRuntime:
             manager,
             initialization_timeout_s=initialization_timeout_s,
             poll_interval_s=poll_interval_s,
+            stable_for_s=stable_for_s,
         )
         monitor.start()
         self.restart_recovery_monitor = monitor
@@ -537,6 +959,7 @@ class DeviceRuntime:
         recovery = self.profile.recovery if hasattr(self.profile, "recovery") else {}
         timeout_s = max(0.1, float(recovery.get("initialization_timeout_s", 10.0)))
         poll_interval_s = max(0.02, float(recovery.get("restart_poll_interval_s", 0.1)))
+        stable_for_s = max(0.0, float(recovery.get("stable_for_s", 0.0) or 0.0))
         result = ProfileRecoveryStateMachine(self.profile, self.artifacts, manager).run(
             timeout_s,
             cursors=cursors,
@@ -547,6 +970,7 @@ class DeviceRuntime:
                 manager,
                 initialization_timeout_s=timeout_s,
                 poll_interval_s=poll_interval_s,
+                stable_for_s=stable_for_s,
             )
         return result
 

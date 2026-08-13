@@ -11,12 +11,29 @@
       "capabilities": ["online_asr", "online_nlp", "tts"]
     }
   ],
-  "initialization_patterns": ["algo\\s+ready"],
-  "restart_patterns": ["unexpected\\s+reboot"],
+  "initialization_patterns": [{
+    "pattern": "algo\\s+ready",
+    "roles": ["csk"],
+    "phases": ["initialization", "smoke_initialization"],
+    "debounce_ms": 500,
+    "fixtures": {
+      "positive": ["algo ready"],
+      "negative": ["algo not ready"],
+      "segmented": [["algo ", "ready"]]
+    }
+  }],
+  "restart_patterns": [{
+    "pattern": "unexpected\\s+reboot",
+    "roles": ["csk"],
+    "phases": ["restart"],
+    "debounce_ms": 1000,
+    "fixtures": {"positive": ["unexpected reboot"], "negative": ["reboot request accepted"]}
+  }],
   "recovery": {
     "initialization_timeout_s": 10.0,
     "restart_poll_interval_s": 0.1,
-    "stop_on_failure": true
+    "stable_for_s": 1.0,
+    "stop_on_failure": false
   },
   "commands": [
     {
@@ -48,6 +65,11 @@
     }
   ],
   "player_markers": {},
+  "health_policy": {
+    "NO_WAKEUP": {"threshold": 3, "handling": "snapshot_and_continue", "stop": false},
+    "NO_RECOGNITION": {"threshold": 3, "handling": "snapshot_and_session_recovery_continue", "stop": false},
+    "PLAYER_FAILURE": {"threshold": 2, "handling": "snapshot_and_continue", "stop": false}
+  },
   "observations": {
     "wakeup": {"patterns": [], "final_patterns": []},
     "offline_asr": {"patterns": [], "fields": ["keyword", "intent"]},

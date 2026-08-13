@@ -45,12 +45,16 @@ class SerialManager:
         self.open_failures: dict[str, str] = {}
 
     def start(self) -> None:
+        self.artifacts.require_cases_frozen("serial_capture")
         if not self.ports:
             self.artifacts.emit("SERIAL_SKIP", message="未声明串口，设备语音能力将按缺失证据处理。", task_log=True)
             return
         if self.factory is None:
             raise RuntimeError("pyserial is required for serial capture")
         for spec in self.ports:
+            # Create the continuous fact source before opening or writing to a
+            # device so an early open/write failure still has a stable path.
+            self.artifacts.serial_log_path(spec.port, spec.role).touch(exist_ok=True)
             try:
                 handle = self.factory(spec.port, spec.baudrate, timeout=0.2)
             except Exception as error:
@@ -71,7 +75,7 @@ class SerialManager:
 
     def _reader(self, spec: PortSpec) -> None:
         role = spec.role or "unknown"
-        path = self.artifacts.run_dir / "serial_logs" / f"serial_{spec.port}_{role}.log"
+        path = self.artifacts.serial_log_path(spec.port, role)
         try:
             with path.open("a", encoding="utf-8") as log:
                 while not self.stop_event.is_set():
@@ -96,7 +100,9 @@ class SerialManager:
                     event = SerialEvent(spec.port, role, self.cursors[spec.port], timestamp, time.monotonic(), text)
                     with self._events_lock:
                         self.events[spec.port].append(event)
-                    log.write(f"[{timestamp}] {spec.port} {role} {text}\n")
+                    # Each captured event occupies exactly one physical line;
+                    # cursor therefore maps directly to the human log line.
+                    log.write(f"[{timestamp}] {spec.port} {role} #{self.cursors[spec.port]} {text}\n")
                     log.flush()
                     self.artifacts.emit("SERIAL_LINE", message=f"{spec.port}: {text[:180]}", task_log=False, port=spec.port, role=role, cursor=self.cursors[spec.port], line=text)
         except Exception as error:

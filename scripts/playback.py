@@ -74,15 +74,14 @@ class PlaybackBackend:
             "player_script": str(self.script),
             **fields,
         }
-        lifecycle_log = self.artifacts.run_dir / "tool_logs" / "player_lifecycle.jsonl"
-        record["lifecycle_log"] = str(lifecycle_log)
-        self.artifacts.append_tool_jsonl("player_lifecycle.jsonl", record)
         self.artifacts.emit(
             event,
             level=level,
             message=message,
             task_log=True,
-            lifecycle_event=event,
+            phase="playback",
+            status=fields.get("tool_status", ""),
+            raw=record,
             **{
                 key: value
                 for key, value in record.items()
@@ -117,11 +116,11 @@ class PlaybackBackend:
             )
         except subprocess.TimeoutExpired as error:
             duration_s = round(time.monotonic() - started, 3)
-            tool_log = self.artifacts.write_tool_log("player_probe.log", self._timeout_output(error))
+            self.artifacts.write_tool_log("player_probe_timeout", self._timeout_output(error))
             self._record_lifecycle(
                 "PROBE_TIMEOUT", event="PLAYER_PROBE_TIMEOUT", level="ERROR",
                 message=f"播放器探测超时，已等待 {duration_s:.3f}s。", timeout_s=30.0,
-                duration_s=duration_s, evidence=str(tool_log), tool_status="FAIL",
+                duration_s=duration_s, evidence="tool.log", tool_status="FAIL",
             )
             return False
         except OSError as error:
@@ -132,7 +131,7 @@ class PlaybackBackend:
             return False
         ok = completed.returncode == 0
         output = completed.stdout or completed.stderr or ""
-        tool_log = self.artifacts.write_tool_log("player_probe.log", output)
+        self.artifacts.write_tool_log("player_probe", output)
         duration_s = round(time.monotonic() - started, 3)
         self._record_lifecycle(
             "PROBE_COMPLETED" if ok else "PROBE_FAILED",
@@ -141,7 +140,7 @@ class PlaybackBackend:
             message=f"播放器探测{'通过' if ok else '失败'}。",
             returncode=completed.returncode,
             tool_output=output[-500:],
-            evidence=str(tool_log),
+            evidence="tool.log",
             duration_s=duration_s,
             tool_status="PASS" if ok else "FAIL",
         )
@@ -190,18 +189,18 @@ class PlaybackBackend:
             )
         except subprocess.TimeoutExpired as error:
             duration_s = round(time.monotonic() - started, 3)
-            tool_log = self.artifacts.write_tool_log(
+            self.artifacts.write_tool_log(
                 f"play_{case_id or audio.stem}.log", self._timeout_output(error),
             )
             self.last_playback.update({
                 "status": "TIMEOUT", "reason": "player_process_timeout", "duration_s": duration_s,
-                "evidence": str(tool_log),
+                "evidence": "tool.log",
             })
             self._record_lifecycle(
                 "TIMEOUT", event="HOST_AUDIO_TIMEOUT", level="ERROR",
                 message=f"主机播放器超时，已等待 {duration_s:.3f}s。",
                 case_id=case_id, broadcast_id=broadcast_id, audio=audio, timeout_s=timeout_s,
-                duration_s=duration_s, evidence=str(tool_log), tool_status="FAIL",
+                duration_s=duration_s, evidence="tool.log", tool_status="FAIL",
                 device_playback_status="UNVERIFIED", error=f"{type(error).__name__}: {error}",
             )
             return False
@@ -215,7 +214,7 @@ class PlaybackBackend:
             return False
         ended = time.monotonic()
         output = (completed.stdout or "") + (completed.stderr or "")
-        tool_log = self.artifacts.write_tool_log(f"play_{case_id or audio.stem}.log", output)
+        self.artifacts.write_tool_log(f"play_{case_id or audio.stem}.log", output)
         duration_s = round(ended - started, 3)
         ok = completed.returncode == 0
         self.last_playback.update({
@@ -223,7 +222,7 @@ class PlaybackBackend:
             "reason": "host_player_completed" if ok else "player_returncode_nonzero",
             "returncode": completed.returncode,
             "duration_s": duration_s,
-            "evidence": str(tool_log),
+            "evidence": "tool.log",
         })
         self._record_lifecycle(
             "COMPLETED" if ok else "FAILED", event="HOST_AUDIO_END",
@@ -233,7 +232,7 @@ class PlaybackBackend:
                 if ok else f"主机播放器返回失败，退出码 {completed.returncode}。"
             ),
             case_id=case_id, broadcast_id=broadcast_id, audio=audio,
-            returncode=completed.returncode, duration_s=duration_s, evidence=str(tool_log),
+            returncode=completed.returncode, duration_s=duration_s, evidence="tool.log",
             tool_status="PASS" if ok else "FAIL", device_playback_status="UNVERIFIED",
             tool_output=output[-500:],
         )
@@ -281,7 +280,7 @@ class PlaybackBackend:
             device_playback_status=("FAILED" if state == "ERROR" else ("OBSERVED" if state else "UNKNOWN")),
             **record,
         )
-        return {**record, "lifecycle_log": lifecycle["lifecycle_log"]}
+        return {**record, "lifecycle_log": str(self.artifacts.tool_log_path)}
 
 
 class CaptureBackend:

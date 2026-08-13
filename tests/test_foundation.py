@@ -85,6 +85,10 @@ class RecoveryManager:
 
 
 class FoundationTests(unittest.TestCase):
+    @staticmethod
+    def _freeze(artifacts, *case_ids: str) -> None:
+        artifacts.freeze_cases([{"case_id": case_id, "scenario": "fixture"} for case_id in case_ids])
+
     def test_connection_spec_supports_zero_one_and_many_ports(self):
         self.assertEqual(ConnectionSpec.from_mapping({}).ports, ())
         spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM1", "baudrate": 115200, "role": "csk"}, "COM2:upper"], "baudrate": 921600})
@@ -134,9 +138,54 @@ class FoundationTests(unittest.TestCase):
             artifacts.record_case(CaseResult("one", "PASS", reason="fixture"))
             summary = artifacts.finalize("PASS", "fixture complete")
             self.assertEqual(summary["status"], "PASS")
-            self.assertTrue((artifacts.run_dir / "task.log").read_text(encoding="utf-8"))
-            self.assertTrue((artifacts.run_dir / "progress.json").is_file())
-            self.assertFalse((artifacts.run_dir / "serial_merged.log").exists())
+            self.assertTrue((artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
+            self.assertTrue((artifacts.run_dir / "results.csv").is_file())
+            self.assertTrue((artifacts.run_dir / "cases.csv").is_file())
+            self.assertEqual({item.name for item in artifacts.run_dir.iterdir()}, {"serial_logs", "tool.log", "results.csv", "cases.csv"})
+
+    def test_cases_are_frozen_as_utf8_bom_before_playback_and_results_reconcile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            audio = root / "fixture.mp3"
+            audio.write_bytes(b"fixture")
+            artifacts = TaskArtifacts(root, "ledger")
+            self._freeze(artifacts, "case-a", "case-b")
+            with self.assertRaises(RuntimeError):
+                artifacts.freeze_cases([])
+            artifacts.record_case(CaseResult("case-a", "PASS", reason="fixture"))
+            artifacts.record_case(CaseResult("case-b", "FAIL", reason="fixture"))
+            summary = artifacts.finalize("PASS", "fixture complete")
+            self.assertEqual(summary["status"], "FAIL")
+            self.assertEqual(summary["planned"], 2)
+            self.assertEqual(summary["completed"], 2)
+            self.assertEqual(summary["valid"], 2)
+            self.assertEqual(summary["success_rate"], 50.0)
+            self.assertEqual(artifacts.cases_path.read_bytes()[:3], b"\xef\xbb\xbf")
+            self.assertEqual(artifacts.results_path.read_bytes()[:3], b"\xef\xbb\xbf")
+
+    def test_playback_requires_cases_to_be_frozen(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "freeze-required")
+            runtime = ScenarioRuntime(artifacts)
+            audio = Path(directory) / "fixture.mp3"
+            audio.write_bytes(b"fixture")
+            with self.assertRaisesRegex(RuntimeError, "冻结 cases.csv"):
+                runtime.play(audio, case_id="case")
+            artifacts.finalize("BLOCKED", "fixture complete")
+
+    def test_user_stop_keeps_four_artifacts_and_aborted_results_row(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "user-stop")
+            self._freeze(artifacts, "done", "interrupted")
+            artifacts.record_case(CaseResult("done", "PASS", reason="fixture"))
+            artifacts.stop.request("USER_STOP")
+            artifacts.record_case(CaseResult("interrupted", "ABORTED", reason="USER_STOP"))
+            summary = artifacts.finalize("STOPPED", "USER_STOP")
+            self.assertEqual(summary["status"], "STOPPED")
+            self.assertEqual({item.name for item in artifacts.run_dir.iterdir()}, {"serial_logs", "tool.log", "results.csv", "cases.csv"})
+            rows = list(__import__("csv").DictReader(artifacts.results_path.open(encoding="utf-8-sig")))
+            self.assertEqual([row["final_status"] for row in rows], ["PASS", "ABORTED"])
+            self.assertIn("USER_STOP", (artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
 
     def test_exception_counts_accumulate_across_rounds_and_are_persisted(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -151,16 +200,14 @@ class FoundationTests(unittest.TestCase):
             expected = {"BLOCKED": 1, "FAIL": 2}
             self.assertEqual(summary["exception_counts"], expected)
             self.assertEqual(summary["exception_total"], 3)
-            progress = json.loads((artifacts.run_dir / "progress.json").read_text(encoding="utf-8"))
-            self.assertEqual(progress["exception_counts"], expected)
-            self.assertEqual(progress["exception_total"], 3)
-            tool_log = (artifacts.run_dir / "tool_logs" / "exception_summary.log").read_text(encoding="utf-8")
+            tool_log = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
             self.assertEqual(tool_log.count("[EXCEPTION_SUMMARY]"), 4)
             self.assertIn("\n\n", tool_log)
 
     def test_serial_manager_writes_independent_port_log(self):
         with tempfile.TemporaryDirectory() as directory:
             artifacts = TaskArtifacts(Path(directory), "serial", [])
+            self._freeze(artifacts)
             spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM1", "baudrate": 115200, "role": "csk"}]})
             manager = SerialManager(spec.ports, artifacts, factory=FakeSerial)
             manager.start()
@@ -179,6 +226,7 @@ class FoundationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             artifacts = TaskArtifacts(Path(directory), "serial-filter")
+            self._freeze(artifacts)
             spec = ConnectionSpec.from_mapping({"ports": [
                 {"port": "COM1", "baudrate": 115200, "role": "csk"},
                 {"port": "COM2", "baudrate": 115200, "role": "upper"},
@@ -215,6 +263,7 @@ class FoundationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             artifacts = TaskArtifacts(Path(directory), "serial-reconnect")
+            self._freeze(artifacts)
             spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM1", "baudrate": 115200}]})
             manager = SerialManager(spec.ports, artifacts, factory=FlakySerial)
             manager.start()
@@ -244,14 +293,11 @@ class FoundationTests(unittest.TestCase):
                     ),
                 )
             artifacts.finalize("PASS", "fixture complete")
-            task_log = (artifacts.run_dir / "task.log").read_text(encoding="utf-8")
-            self.assertIn("keyword: da kai kong tiao", task_log)
-            self.assertIn("command_status: PASS", task_log)
-            self.assertIn("tool_status: PASS", task_log)
+            tool_log = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
+            self.assertIn("da kai kong tiao", tool_log)
+            self.assertIn("command_status\": \"PASS", tool_log)
+            self.assertIn("tool_status\": \"PASS", tool_log)
             self.assertIn("keyword: da kai kong tiao", output.getvalue())
-            event = json.loads((artifacts.run_dir / "task_events.jsonl").read_text(encoding="utf-8").splitlines()[0])
-            self.assertEqual(event["raw_tags"][0]["raw_value"], "da kai kong tiao")
-            self.assertEqual(event["tool_judgement"]["tool_status"], "PASS")
 
     def test_tool_log_and_player_marker_keep_raw_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -288,6 +334,7 @@ class FoundationTests(unittest.TestCase):
             artifacts = TaskArtifacts(Path(directory), "recognition-contract")
             try:
                 runtime = ScenarioRuntime(artifacts)
+                self._freeze(artifacts, "offline-case", "other-case")
                 audio = Path(directory) / "fixture.mp3"
                 audio.write_bytes(b"fixture audio")
                 runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
@@ -323,16 +370,12 @@ class FoundationTests(unittest.TestCase):
                 runtime.record_case(CaseResult("other-case", "PASS", reason="fixture"))
                 summary = artifacts.finalize("FAIL", "fixture complete")
                 self.assertEqual(summary["counts"]["FAIL"], 2)
-                self.assertEqual(summary["anomaly_counts"], {
-                    "MULTIPLE_RECOGNITIONS_FOR_PLAYBACK": 1,
-                    "UNEXPECTED_RECOGNITION": 1,
-                })
-                raw_log = (artifacts.run_dir / "tool_logs" / "recognition_raw.log").read_text(encoding="utf-8")
-                self.assertIn('"keyword":"ni3 hao3 kong1 tiao2"', raw_log)
-                task_log = (artifacts.run_dir / "task.log").read_text(encoding="utf-8")
-                self.assertIn("keyword: ni3 hao3 kong1 tiao2", task_log)
-                events = (artifacts.run_dir / "task_events.jsonl").read_text(encoding="utf-8")
-                self.assertIn('"raw_value": "ni3 hao3 kong1 tiao2"', events)
+                self.assertEqual(summary["anomaly_counts"]["MULTIPLE_RECOGNITIONS_FOR_PLAYBACK"], 1)
+                self.assertEqual(summary["anomaly_counts"]["UNEXPECTED_RECOGNITION"], 1)
+                self.assertEqual(summary["anomaly_counts"]["ONLINE_CORRELATION_INVALID"], 1)
+                tool_log = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
+                self.assertIn("ni3 hao3 kong1 tiao2", tool_log)
+                self.assertIn("RECOGNITION_RAW_RECORDED", tool_log)
             finally:
                 if not artifacts.closed:
                     artifacts.finalize("FAIL", "test cleanup")
@@ -341,6 +384,7 @@ class FoundationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             artifacts = TaskArtifacts(Path(directory), "recognition-content-contract")
             runtime = ScenarioRuntime(artifacts)
+            self._freeze(artifacts, "offline-case")
             audio = Path(directory) / "fixture.mp3"
             audio.write_bytes(b"fixture audio")
             runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
@@ -361,10 +405,136 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(summary["counts"], {"FAIL": 1})
             self.assertEqual(summary["anomaly_counts"]["RECOGNITION_RESULT_MISMATCH"], 1)
 
+    def test_recognition_keeps_raw_value_and_accepts_only_explicit_variant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "semantic-match")
+            self._freeze(artifacts, "offline-case")
+            runtime = ScenarioRuntime(artifacts)
+            audio = Path(directory) / "fixture.mp3"
+            audio.write_bytes(b"fixture")
+            runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+            broadcast = runtime.play(
+                audio,
+                case_id="offline-case",
+                expected_recognition={"keyword": "二十五度"},
+                accepted_raw_variants={"keyword": ["25度"]},
+            )
+            observed = runtime.record_recognition(
+                {"keyword": "25度"}, source="offline", case_id="offline-case",
+                broadcast_id=broadcast["broadcast_id"], normalized={"keyword_text": "二十五度"},
+            )
+            self.assertEqual(observed["status"], "PASS")
+            self.assertEqual(observed["association"]["raw_exact_status"], "FAIL")
+            self.assertEqual(observed["association"]["semantic_status"], "PASS")
+            runtime.record_case(CaseResult("offline-case", "PASS", reason="fixture"))
+            artifacts.finalize("PASS", "fixture complete")
+            row = next(__import__("csv").DictReader(artifacts.results_path.open(encoding="utf-8-sig")))
+            self.assertEqual(row["offline_keyword_raw"], "25度")
+            self.assertEqual(row["raw_exact_status"], "FAIL")
+            self.assertEqual(row["semantic_status"], "PASS")
+
+    def test_repeated_recognition_is_aggregated_in_one_results_row(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "retry-aggregation")
+            self._freeze(artifacts, "offline-case")
+            runtime = ScenarioRuntime(artifacts)
+            audio = Path(directory) / "fixture.mp3"
+            audio.write_bytes(b"fixture")
+            runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+            broadcast = runtime.play(audio, case_id="offline-case", expected_recognition={"keyword": "right"})
+            runtime.record_recognition({"keyword": "wrong"}, source="offline", case_id="offline-case", broadcast_id=broadcast["broadcast_id"])
+            runtime.record_recognition({"keyword": "right"}, source="offline", case_id="offline-case", broadcast_id=broadcast["broadcast_id"])
+            runtime.record_case(CaseResult("offline-case", "PASS", reason="fixture"))
+            artifacts.finalize("FAIL", "fixture complete")
+            rows = list(__import__("csv").DictReader(artifacts.results_path.open(encoding="utf-8-sig")))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["offline_attempts"], "2")
+
+    def test_online_timing_requires_unique_request_in_current_case_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "online-timing")
+            self._freeze(artifacts, "online-case")
+            runtime = ScenarioRuntime(artifacts)
+            audio = Path(directory) / "fixture.mp3"
+            audio.write_bytes(b"fixture")
+            runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+            broadcast = runtime.play(audio, case_id="online-case", expected_recognition={"requestId": "req-1", "asr_text": "天气"})
+            runtime.record_online_request({"requestId": "req-1", "body": "raw-request"}, case_id="online-case")
+            observed = runtime.record_recognition(
+                {"requestId": "req-1", "responseId": "resp-1", "asr_text": "天气"},
+                source="online", case_id="online-case", broadcast_id=broadcast["broadcast_id"],
+            )
+            self.assertTrue(observed["online_correlation"]["valid"])
+            runtime.record_case(CaseResult("online-case", "PASS", reason="fixture"))
+            artifacts.finalize("PASS", "fixture complete")
+            row = next(__import__("csv").DictReader(artifacts.results_path.open(encoding="utf-8-sig")))
+            self.assertEqual(row["online_request_id"], "req-1")
+            self.assertEqual(row["online_response_id"], "resp-1")
+            self.assertEqual(row["correlation_valid"], "True")
+            self.assertTrue(row["recognition_latency_ms"])
+
+    def test_online_response_without_recorded_request_leaves_latency_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "online-unpaired")
+            self._freeze(artifacts, "online-case")
+            runtime = ScenarioRuntime(artifacts)
+            audio = Path(directory) / "fixture.mp3"
+            audio.write_bytes(b"fixture")
+            runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+            broadcast = runtime.play(audio, case_id="online-case", expected_recognition={"requestId": "req-1", "asr_text": "天气"})
+            observed = runtime.record_recognition(
+                {"requestId": "req-1", "responseId": "resp-1", "asr_text": "天气"},
+                source="online", case_id="online-case", broadcast_id=broadcast["broadcast_id"],
+            )
+            self.assertFalse(observed["online_correlation"]["valid"])
+            runtime.record_case(CaseResult("online-case", "PASS", reason="fixture"))
+            artifacts.finalize("FAIL", "fixture complete")
+            row = next(__import__("csv").DictReader(artifacts.results_path.open(encoding="utf-8-sig")))
+            self.assertEqual(row["recognition_latency_ms"], "")
+            self.assertEqual(row["correlation_valid"], "False")
+
+    def test_late_result_after_case_close_is_not_consumed_by_next_case(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "late-result")
+            self._freeze(artifacts, "old-case", "new-case")
+            runtime = ScenarioRuntime(artifacts)
+            audio = Path(directory) / "fixture.mp3"
+            audio.write_bytes(b"fixture")
+            runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
+            broadcast = runtime.play(audio, case_id="old-case", expected_recognition={"keyword": "old"})
+            runtime.record_case(CaseResult("old-case", "PASS", reason="fixture"))
+            late = runtime.record_recognition(
+                {"keyword": "old"}, source="offline", case_id="old-case", broadcast_id=broadcast["broadcast_id"],
+            )
+            self.assertEqual(late["reason"], "LATE_RESULT_AFTER_CASE_CLOSE")
+            runtime.record_case(CaseResult("new-case", "PASS", reason="fixture"))
+            summary = artifacts.finalize("PASS", "fixture complete")
+            self.assertEqual(summary["counts"]["FAIL"], 1)
+            self.assertIn("LATE_RESULT_AFTER_CASE_CLOSE", (artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
+
+    def test_health_policy_records_threshold_and_continues_with_adapter_callback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "health-policy")
+            self._freeze(artifacts, "case")
+            artifacts.configure_health_policy({
+                "NO_WAKEUP": {"threshold": 2, "handling": "snapshot_and_session_recovery_continue", "stop": False},
+            })
+            calls = []
+            runtime = ScenarioRuntime(artifacts, health_recovery=lambda category, detail: calls.append((category, detail)) or "ok")
+            runtime.record_no_wakeup("case")
+            runtime.record_no_wakeup("case")
+            self.assertEqual(len(calls), 1)
+            self.assertIsNone(artifacts.check_runtime())
+            runtime.record_case(CaseResult("case", "PASS", reason="fixture"))
+            summary = artifacts.finalize("PASS", "fixture complete")
+            self.assertEqual(summary["status"], "FAIL")
+            self.assertIn("HEALTH_SESSION_RECOVERY_COMPLETED", (artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
+
     def test_multiple_wake_results_for_one_playback_are_recorded_as_anomalies(self):
         with tempfile.TemporaryDirectory() as directory:
             artifacts = TaskArtifacts(Path(directory), "multiple-wake-results")
             runtime = ScenarioRuntime(artifacts)
+            self._freeze(artifacts, "wake-case")
             audio = Path(directory) / "fixture.mp3"
             audio.write_bytes(b"fixture audio")
             runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
@@ -412,6 +582,7 @@ class FoundationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             artifacts = TaskArtifacts(Path(directory), "player-lifecycle")
             runtime = ScenarioRuntime(artifacts)
+            self._freeze(artifacts, "player-case")
             audio = Path(directory) / "fixture.mp3"
             audio.write_bytes(b"fixture audio")
             runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
@@ -425,20 +596,17 @@ class FoundationTests(unittest.TestCase):
                 evidence_refs=("serial_logs/serial_COM9_player.log#21",),
             )
             self.assertEqual(marker["player_state"], "START")
-            lifecycle = [
-                json.loads(line)
-                for line in (artifacts.run_dir / "tool_logs" / "player_lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
-            ]
-            self.assertEqual(lifecycle[-1]["lifecycle_status"], "DEVICE_START")
-            self.assertEqual(lifecycle[-1]["broadcast_id"], broadcast["broadcast_id"])
-            self.assertEqual(lifecycle[-1]["raw_marker"], "START")
-            self.assertEqual(lifecycle[-1]["evidence_refs"], ["serial_logs/serial_COM9_player.log#21"])
+            lifecycle = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
+            self.assertIn("DEVICE_START", lifecycle)
+            self.assertIn(broadcast["broadcast_id"], lifecycle)
+            self.assertIn("serial_logs/serial_COM9_player.log#21", lifecycle)
             artifacts.finalize("PASS", "fixture complete")
 
     def test_player_failure_and_device_error_marker_fail_the_current_case(self):
         with tempfile.TemporaryDirectory() as directory:
             artifacts = TaskArtifacts(Path(directory), "player-lifecycle-failure")
             runtime = ScenarioRuntime(artifacts)
+            self._freeze(artifacts, "host-failure", "device-failure")
             audio = Path(directory) / "fixture.mp3"
             audio.write_bytes(b"fixture audio")
             runtime.player.play = lambda *_args, **_kwargs: False  # type: ignore[method-assign]
@@ -460,9 +628,9 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(summary["counts"], {"FAIL": 2})
             self.assertEqual(summary["anomaly_counts"]["PLAYER_PLAYBACK_FAILED"], 1)
             self.assertEqual(summary["anomaly_counts"]["PLAYER_DEVICE_MARKER_ERROR"], 1)
-            lifecycle = (artifacts.run_dir / "tool_logs" / "player_lifecycle.jsonl").read_text(encoding="utf-8")
-            self.assertIn('"lifecycle_status":"DEVICE_ERROR"', lifecycle)
-            self.assertIn('"device_playback_status":"FAILED"', lifecycle)
+            lifecycle = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
+            self.assertIn("DEVICE_ERROR", lifecycle)
+            self.assertIn("FAILED", lifecycle)
 
     def test_host_player_success_and_timeout_are_written_to_lifecycle_log(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -480,16 +648,12 @@ class FoundationTests(unittest.TestCase):
                 side_effect=__import__("subprocess").TimeoutExpired("player", 0.1, output="partial output"),
             ):
                 self.assertFalse(player.play(audio, case_id="timeout", broadcast_id="broadcast-timeout", timeout=0.1))
-            lifecycle = [
-                json.loads(line)
-                for line in (artifacts.run_dir / "tool_logs" / "player_lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
-            ]
-            success = [row for row in lifecycle if row["broadcast_id"] == "broadcast-success"]
-            timeout = [row for row in lifecycle if row["broadcast_id"] == "broadcast-timeout"]
-            self.assertEqual([row["lifecycle_status"] for row in success], ["REQUESTED", "PROCESS_STARTED", "COMPLETED"])
-            self.assertEqual(timeout[-1]["lifecycle_status"], "TIMEOUT")
-            timeout_output = (artifacts.run_dir / "tool_logs" / "play_timeout.log").read_text(encoding="utf-8")
-            self.assertIn("partial output", timeout_output)
+            lifecycle = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
+            self.assertIn("REQUESTED", lifecycle)
+            self.assertIn("PROCESS_STARTED", lifecycle)
+            self.assertIn("COMPLETED", lifecycle)
+            self.assertIn("TIMEOUT", lifecycle)
+            self.assertIn("partial output", lifecycle)
             artifacts.finalize("PASS", "fixture complete")
 
     def test_ordered_wake_word_verification_requires_current_raw_result(self):
@@ -508,6 +672,7 @@ class FoundationTests(unittest.TestCase):
                 },
             ]
             runtime = ScenarioRuntime(artifacts, wake_words=wake_words)
+            self._freeze(artifacts, "wake-default", "wake-alternate")
             audio = Path(directory) / "fixture.mp3"
             audio.write_bytes(b"fixture audio")
             runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
@@ -536,8 +701,8 @@ class FoundationTests(unittest.TestCase):
             summary = artifacts.finalize("FAIL", "fixture complete")
             self.assertEqual(summary["counts"], {"PASS": 1, "FAIL": 1})
             self.assertEqual(summary["anomaly_counts"]["WAKE_WORD_MISMATCH"], 1)
-            wake_log = (artifacts.run_dir / "tool_logs" / "wake_word_verification.log").read_text(encoding="utf-8")
-            self.assertIn('"wake_word_id":"alternate-hey-tcl"', wake_log)
+            wake_log = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
+            self.assertIn("alternate-hey-tcl", wake_log)
 
     def test_wake_word_order_violation_fails_without_advancing_requirements(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -547,6 +712,7 @@ class FoundationTests(unittest.TestCase):
                 {"wake_word_id": "second", "spoken_text": "第二个", "expected_raw": {"keyword": "second"}},
             ]
             runtime = ScenarioRuntime(artifacts, wake_words=requirements)
+            self._freeze(artifacts, "wake-order")
             audio = Path(directory) / "fixture.mp3"
             audio.write_bytes(b"fixture audio")
             runtime.player.play = lambda *_args, **_kwargs: True  # type: ignore[method-assign]
@@ -575,6 +741,24 @@ class FoundationTests(unittest.TestCase):
             path.write_text(json.dumps(payload), encoding="utf-8")
             profile = DeviceProfile.load(path)
             self.assertEqual(profile.observation_rules("online")["id_fields"], ["requestId"])
+
+    def test_marker_scope_and_same_event_debounce_are_deterministic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profile.json"
+            path.write_text(json.dumps({
+                **PROFILE,
+                "initialization_patterns": [{
+                    "pattern": "algo ready", "ports": ["COM9"], "roles": ["csk"],
+                    "phases": ["initialization"], "debounce_ms": 1000,
+                    "fixtures": {"positive": ["algo ready"], "negative": ["algo not ready"]},
+                }],
+            }), encoding="utf-8")
+            profile = DeviceProfile.load(path)
+            rule = profile.initialization_patterns
+            self.assertFalse(profile.match_any(rule, "algo ready", port="COM1", role="csk", phase="initialization", monotonic_seconds=1.0))
+            self.assertTrue(profile.match_any(rule, "algo ready", port="COM9", role="csk", phase="initialization", monotonic_seconds=1.0))
+            self.assertTrue(profile.match_any(rule, "algo ready", port="COM9", role="csk", phase="initialization", monotonic_seconds=1.0))
+            self.assertFalse(profile.match_any(rule, "algo ready", port="COM9", role="csk", phase="initialization", monotonic_seconds=1.1))
 
     def test_command_sender_blocks_wrong_port_and_accepts_configured_reply(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -662,9 +846,9 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(len(manager.writes), 2)
             self.assertEqual(result["commands"][0]["reason"], "no_ack_or_evidence")
             self.assertEqual(artifacts.anomaly_counts["INITIALIZATION_RECOVERY_FAILED"], 1)
-            self.assertEqual(artifacts.check_runtime(), "INITIALIZATION_RECOVERY_FAILED")
-            recovery_log = (artifacts.run_dir / "tool_logs" / "initialization_recovery.jsonl").read_text(encoding="utf-8")
-            self.assertIn('"status":"BLOCKED"', recovery_log)
+            self.assertIsNone(artifacts.check_runtime())
+            recovery_log = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
+            self.assertIn("PROFILE_RECOVERY_RESULT", recovery_log)
             artifacts.finalize("FAIL", "fixture complete")
 
     def test_recovery_does_not_replace_a_mismatched_direct_ack_with_evidence(self):
@@ -723,6 +907,37 @@ class FoundationTests(unittest.TestCase):
             monitor.stop()
             artifacts.finalize("PASS", "fixture complete")
 
+    def test_restart_during_recovery_cancels_old_epoch_before_command_send(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile_path = root / "profile.json"
+            profile_path.write_text(json.dumps({
+                **PROFILE,
+                "initialization_patterns": ["algo ready"],
+                "restart_patterns": ["device rebooted"],
+                "recovery": {"stable_for_s": 0.02},
+                "commands": [{
+                    "command": "log.level 4", "roles": ["csk"], "safe_init": True,
+                    "success_patterns": ["level 4 ok"], "timeout_s": 0.05,
+                }],
+            }), encoding="utf-8")
+            artifacts = TaskArtifacts(root, "restart-cancel")
+            spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM9", "baudrate": 115200, "role": "csk"}]})
+            manager = RecoveryManager(spec.ports, [
+                [RecoveryEvent("COM9", "csk", 2, "algo ready"), RecoveryEvent("COM9", "csk", 3, "device rebooted")],
+                [RecoveryEvent("COM9", "csk", 4, "algo ready")],
+                [RecoveryEvent("COM9", "csk", 5, "level 4 ok")],
+            ])
+            manager.events.append(RecoveryEvent("COM9", "csk", 1, "device rebooted"))
+            monitor = ProfileRestartRecoveryMonitor(DeviceProfile.load(profile_path), artifacts, manager, initialization_timeout_s=0.1)
+            recovery = monitor.poll()
+            self.assertEqual(recovery[0]["status"], "CANCELLED")
+            self.assertEqual(recovery[-1]["status"], "PASS")
+            self.assertEqual(manager.writes, [("log.level 4", "COM9")])
+            self.assertIn("PROFILE_RECOVERY_CANCELLED", (artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
+            monitor.stop()
+            artifacts.finalize("PASS", "fixture complete")
+
     def test_wakeup_command_and_online_status_are_explicit(self):
         wake, wake_judgement = judge_wakeup("xiao ti xiao ti", "xiao ti xiao ti", duration_ms=120)
         self.assertEqual(wake["wakeup_status"], "PASS")
@@ -766,15 +981,17 @@ class FoundationTests(unittest.TestCase):
             self.assertIsNone(reason)
             self.assertTrue(complete)
             self.assertGreaterEqual(state["fetched"], 1)
-            evidence_path, evidence_sha = runtime.write_evidence(
-                events, unit=1, case_id="fixture-case", phase="response_wait", attempt=1,
+            artifacts.emit(
+                "OBSERVATION_EVIDENCE",
+                message="项目适配器引用连续串口证据，不再复制专项 evidence 文件。",
+                case_id="fixture-case",
+                evidence=["serial_logs/serial_COM11_csk.log#1"],
+                raw={"events": [item.line for item in events]},
             )
-            self.assertTrue(evidence_path.is_file())
-            self.assertTrue(evidence_sha)
             runtime.record_case(CaseResult("fixture-case", "PASS", reason="runtime"))
             summary = artifacts.finalize("PASS", "fixture complete")
             self.assertEqual(summary["status"], "PASS")
-            self.assertIn("Wakeup keyword", evidence_path.read_text(encoding="utf-8"))
+            self.assertIn("Wakeup keyword", (artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

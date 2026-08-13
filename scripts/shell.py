@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from typing import Any, Callable, Iterable, Mapping
@@ -15,9 +14,9 @@ except ImportError:  # direct execution fallback
     from profile import DeviceProfile, ProfileError
 
 
-def _patterns(rule: Mapping[str, Any], name: str) -> list[str]:
+def _patterns(rule: Mapping[str, Any], name: str) -> list[Any]:
     value = rule.get(name, [])
-    return [str(item) for item in value] if isinstance(value, list) else []
+    return list(value) if isinstance(value, list) else []
 
 
 def _positive_float(rule: Mapping[str, Any], name: str, default: float) -> float:
@@ -66,23 +65,52 @@ class ProfileCommandSender:
         snapshot = self.manager.snapshot(port)
         return {port: int(snapshot.get(port, 0))}
 
+    def _event_matches(self, patterns: Iterable[Any], event: Any, *, phase: str) -> bool:
+        values = list(patterns)
+        if not values:
+            return False
+        scope = {
+            "port": getattr(event, "port", None),
+            "role": getattr(event, "role", None),
+            "phase": phase,
+            "monotonic_seconds": getattr(event, "monotonic_seconds", None),
+        }
+        decisions = self.profile.match_details(values, str(getattr(event, "line", "")), **scope)
+        matched = any(ok for _rule, ok, _reason in decisions)
+        if not matched:
+            rejected = [reason for _rule, _ok, reason in decisions if reason not in {"pattern_not_matched", "matched"}]
+            if rejected:
+                self.artifacts.emit(
+                    "MARKER_SCOPE_REJECTED",
+                    level="WARN",
+                    message="串口 marker 命中文本但被作用域或去重规则拒绝。",
+                    phase=phase,
+                    port=scope["port"],
+                    role=scope["role"],
+                    raw_line=str(getattr(event, "line", "")),
+                    reason=";".join(rejected),
+                    evidence=ProfileCommandSender._evidence_refs([event]),
+                )
+        return matched
+
     def _matching_events(
         self,
-        patterns: Iterable[str],
+        patterns: Iterable[Any],
         *,
         port: str,
         cursors: Mapping[str, int],
         timeout_s: float,
+        phase: str,
     ) -> list[Any]:
-        values = [str(item) for item in patterns]
+        values = list(patterns)
         if not values or self.manager is None or not hasattr(self.manager, "wait_for"):
             return []
         events = self.manager.wait_for(
-            lambda items: any(self.profile.match_any(values, item.line) for item in items),
+            lambda items: any(self._event_matches(values, item, phase=phase) for item in items),
             timeout_s,
             cursors={port: int(cursors.get(port, 0))},
         )
-        return [item for item in events if self.profile.match_any(values, item.line)]
+        return [item for item in events if self._event_matches(values, item, phase=phase)]
 
     @staticmethod
     def _evidence_refs(events: Iterable[Any]) -> list[str]:
@@ -109,7 +137,14 @@ class ProfileCommandSender:
         )
         return {"status": status, "command": command, "reason": reason}
 
-    def send(self, command: str, *, role: str | None = None, port: str | None = None) -> dict[str, Any]:
+    def send(
+        self,
+        command: str,
+        *,
+        role: str | None = None,
+        port: str | None = None,
+        restart_guard: Callable[[], Any | None] | None = None,
+    ) -> dict[str, Any]:
         """Send and verify an approved command without treating silence as success."""
         try:
             rule = dict(self.profile.assert_command_allowed(command, role))
@@ -146,6 +181,17 @@ class ProfileCommandSender:
         attempts: list[dict[str, Any]] = []
 
         for attempt in range(1, max_attempts + 1):
+            restart_event = restart_guard() if restart_guard else None
+            if restart_event:
+                return {
+                    "status": "CANCELLED",
+                    "command": command,
+                    "role": role,
+                    "port": resolved_port,
+                    "attempts": attempts,
+                    "reason": "restart_detected_during_recovery",
+                    "restart_event": restart_event,
+                }
             started = time.monotonic()
             cursors = self._snapshot(resolved_port)
             self.artifacts.emit(
@@ -172,7 +218,9 @@ class ProfileCommandSender:
             if write_error:
                 failure_reason = "command_write_failed"
             elif direct_reply.strip():
-                if success_patterns and self.profile.match_any(success_patterns, direct_reply):
+                if success_patterns and self.profile.match_any(
+                    success_patterns, direct_reply, port=resolved_port, role=role, phase="command_direct_ack",
+                ):
                     validation_source = "direct_ack"
                 else:
                     failure_reason = "direct_ack_not_matched"
@@ -182,6 +230,7 @@ class ProfileCommandSender:
                     port=resolved_port,
                     cursors=cursors,
                     timeout_s=ack_timeout_s,
+                    phase="command_serial_ack",
                 )
                 if ack_events:
                     validation_source = "serial_ack"
@@ -192,6 +241,7 @@ class ProfileCommandSender:
                         port=resolved_port,
                         cursors=cursors,
                         timeout_s=evidence_timeout_s,
+                        phase="command_evidence",
                     )
                     if evidence_events:
                         validation_source = "serial_evidence"
@@ -236,6 +286,17 @@ class ProfileCommandSender:
                 **result,
             )
             if attempt < max_attempts:
+                restart_event = restart_guard() if restart_guard else None
+                if restart_event:
+                    return {
+                        "status": "CANCELLED",
+                        "command": command,
+                        "role": role,
+                        "port": resolved_port,
+                        "attempts": attempts,
+                        "reason": "restart_detected_during_recovery",
+                        "restart_event": restart_event,
+                    }
                 self.artifacts.emit(
                     "SERIAL_COMMAND_RETRY",
                     level="WARN",
@@ -269,18 +330,12 @@ class ProfileRecoveryStateMachine:
         self.manager = manager
         self.state = "CREATED"
 
-    def _append_result_log(self, result: Mapping[str, Any]) -> None:
-        self.artifacts.write_tool_log(
-            "initialization_recovery.jsonl",
-            json.dumps(dict(result), ensure_ascii=False, separators=(",", ":")),
-        )
-
     @staticmethod
     def _evidence_refs(events: Iterable[Any]) -> list[str]:
         return ProfileCommandSender._evidence_refs(events)
 
     def _complete(self, result: dict[str, Any]) -> dict[str, Any]:
-        level = "INFO" if result["status"] == "PASS" else "ERROR"
+        level = "INFO" if result["status"] == "PASS" else ("WARN" if result["status"] == "CANCELLED" else "ERROR")
         self.artifacts.emit(
             "PROFILE_RECOVERY_RESULT",
             level=level,
@@ -288,15 +343,14 @@ class ProfileRecoveryStateMachine:
             task_log=True,
             **result,
         )
-        self._append_result_log(result)
-        if result["status"] != "PASS":
+        if result["status"] not in {"PASS", "CANCELLED"}:
             self.artifacts.record_anomaly(
                 "INITIALIZATION_RECOVERY_FAILED",
                 "初始化命令恢复未完成，已保留命令尝试、回执和旁证。",
                 recovery=result,
             )
             recovery_config = self.profile.recovery if hasattr(self.profile, "recovery") else {}
-            if bool(recovery_config.get("stop_on_failure", True)):
+            if bool(recovery_config.get("stop_on_failure", False)):
                 self.artifacts.stop.request("INITIALIZATION_RECOVERY_FAILED")
                 self.artifacts.emit(
                     "INITIALIZATION_RECOVERY_STOP_REQUESTED",
@@ -308,12 +362,48 @@ class ProfileRecoveryStateMachine:
                 )
         return result
 
+    def _event_matches(self, patterns: Iterable[Any], event: Any, *, phase: str) -> bool:
+        return ProfileCommandSender(self.profile, self.artifacts, lambda _command, _port: "", self.manager)._event_matches(
+            patterns, event, phase=phase,
+        )
+
+    @staticmethod
+    def _cancelled_result(
+        *,
+        recovery_reason: str,
+        epoch: int | None,
+        state: str,
+        restart_event: Any,
+        commands: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "status": "CANCELLED",
+            "reason": "restart_detected_during_recovery",
+            "state": state,
+            "recovery_reason": recovery_reason,
+            "epoch": epoch,
+            "commands": list(commands or ()),
+            "restart_event": restart_event,
+        }
+
+    def _wait_stable(self, stable_for_s: float, restart_guard: Callable[[], Any | None] | None) -> Any | None:
+        deadline = time.monotonic() + stable_for_s
+        while time.monotonic() < deadline:
+            restart_event = restart_guard() if restart_guard else None
+            if restart_event:
+                return restart_event
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        return restart_guard() if restart_guard else None
+
     def run(
         self,
         timeout_s: float = 5.0,
         *,
         cursors: Mapping[str, int] | None = None,
         recovery_reason: str = "startup",
+        epoch: int | None = None,
+        restart_guard: Callable[[], Any | None] | None = None,
+        stable_for_s: float | None = None,
     ) -> dict[str, Any]:
         enabled = [
             dict(item) for item in self.profile.payload.get("commands", [])
@@ -348,6 +438,12 @@ class ProfileRecoveryStateMachine:
             })
 
         start_cursors = dict(cursors or {port: 0 for port in self.manager.handles})
+        restart_event = restart_guard() if restart_guard else None
+        if restart_event:
+            self.state = "CANCELLED"
+            return self._complete(self._cancelled_result(
+                recovery_reason=recovery_reason, epoch=epoch, state=self.state, restart_event=restart_event,
+            ))
         self.state = "WAIT_INIT"
         self.artifacts.emit(
             "PROFILE_RECOVERY_WAIT_INIT",
@@ -357,13 +453,26 @@ class ProfileRecoveryStateMachine:
             initialization_patterns=self.profile.initialization_patterns,
             timeout_s=timeout_s,
             cursors=start_cursors,
+            epoch=epoch if epoch is not None else self.artifacts.current_epoch,
         )
         events = self.manager.wait_for(
-            lambda items: any(self.profile.match_any(self.profile.initialization_patterns, item.line) for item in items),
+            lambda items: (
+                bool(restart_guard and restart_guard())
+                or any(self._event_matches(self.profile.initialization_patterns, item, phase="initialization") for item in items)
+            ),
             timeout_s,
             cursors=start_cursors,
         )
-        init_events = [item for item in events if self.profile.match_any(self.profile.initialization_patterns, item.line)]
+        restart_event = restart_guard() if restart_guard else None
+        if restart_event:
+            self.state = "CANCELLED"
+            return self._complete(self._cancelled_result(
+                recovery_reason=recovery_reason, epoch=epoch, state=self.state, restart_event=restart_event,
+            ))
+        init_events = [
+            item for item in events
+            if self._event_matches(self.profile.initialization_patterns, item, phase="initialization")
+        ]
         if not init_events:
             self.state = "BLOCKED"
             return self._complete({
@@ -376,15 +485,52 @@ class ProfileRecoveryStateMachine:
                 "commands": [],
             })
 
+        recovery = self.profile.recovery if hasattr(self.profile, "recovery") else {}
+        resolved_stable_for_s = (
+            max(0.0, float(stable_for_s))
+            if stable_for_s is not None
+            else (_positive_float(recovery, "stable_for_s", 0.0) if recovery.get("stable_for_s") else 0.0)
+        )
+        if resolved_stable_for_s:
+            self.state = "STABILIZING"
+            self.artifacts.emit(
+                "PROFILE_RECOVERY_STABILIZING",
+                message=f"初始化 marker 已到达，等待 {resolved_stable_for_s:.2f}s 稳定窗口。",
+                epoch=epoch if epoch is not None else self.artifacts.current_epoch,
+                phase="initialization_recovery",
+                elapsed_ms=round(resolved_stable_for_s * 1000),
+                evidence=ProfileCommandSender._evidence_refs(init_events),
+            )
+            restart_event = self._wait_stable(resolved_stable_for_s, restart_guard)
+            if restart_event:
+                self.state = "CANCELLED"
+                return self._complete(self._cancelled_result(
+                    recovery_reason=recovery_reason, epoch=epoch, state=self.state, restart_event=restart_event,
+                ))
+
         self.state = "SEND_APPROVED"
         sender = ProfileCommandSender(self.profile, self.artifacts, self.manager.write, self.manager)
         results: list[dict[str, Any]] = []
         for rule in enabled:
+            restart_event = restart_guard() if restart_guard else None
+            if restart_event:
+                self.state = "CANCELLED"
+                return self._complete(self._cancelled_result(
+                    recovery_reason=recovery_reason, epoch=epoch, state=self.state,
+                    restart_event=restart_event, commands=results,
+                ))
             command = str(rule.get("command", "")).strip()
             roles = rule.get("roles") or [None]
             role = str(roles[0]) if roles and roles[0] else None
             target = next((spec.port for spec in self.manager.ports if role is None or spec.role == role), None)
-            results.append(sender.send(command, role=role, port=target))
+            command_result = sender.send(command, role=role, port=target, restart_guard=restart_guard)
+            results.append(command_result)
+            if command_result.get("status") == "CANCELLED":
+                self.state = "CANCELLED"
+                return self._complete(self._cancelled_result(
+                    recovery_reason=recovery_reason, epoch=epoch, state=self.state,
+                    restart_event=command_result.get("restart_event"), commands=results,
+                ))
 
         all_passed = bool(results) and all(item.get("status") == "PASS" for item in results)
         self.state = "READY" if all_passed else "BLOCKED"
@@ -410,12 +556,15 @@ class ProfileRestartRecoveryMonitor:
         *,
         initialization_timeout_s: float = 10.0,
         poll_interval_s: float = 0.1,
+        stable_for_s: float = 0.0,
     ) -> None:
         self.profile = profile
         self.artifacts = artifacts
         self.manager = manager
         self.initialization_timeout_s = max(0.1, float(initialization_timeout_s))
         self.poll_interval_s = max(0.02, float(poll_interval_s))
+        self.stable_for_s = max(0.0, float(stable_for_s))
+        self.epoch = artifacts.current_epoch
         self.cursors: dict[str, int] = {}
         self.history: list[dict[str, Any]] = []
         self._stop = threading.Event()
@@ -449,18 +598,22 @@ class ProfileRestartRecoveryMonitor:
         """Process currently available restart markers; exposed for deterministic tests."""
         if not self.profile.restart_patterns or self._stop.is_set():
             return []
-        batch_start = dict(self.cursors)
-        events = self.manager.since(batch_start)
-        if not events:
-            return []
-        progressed = dict(batch_start)
-        for event in events:
+        recovered: list[dict[str, Any]] = []
+        while not self._stop.is_set():
+            events = self.manager.since(dict(self.cursors))
+            restart_event = next((
+                item for item in events
+                if self._event_matches(item, phase="restart")
+            ), None)
+            if restart_event is None:
+                return recovered
+            event = restart_event
             port = str(getattr(event, "port", ""))
             if port:
-                progressed[port] = int(getattr(event, "cursor", progressed.get(port, 0)))
-            if not self.profile.match_any(self.profile.restart_patterns, event.line):
-                continue
-            baseline = dict(progressed)
+                self.cursors[port] = int(getattr(event, "cursor", self.cursors.get(port, 0)))
+            baseline = dict(self.cursors)
+            self.epoch += 1
+            self.artifacts.set_epoch(self.epoch, reason="restart_marker")
             self.artifacts.emit(
                 "DEVICE_RESTART_DETECTED",
                 level="WARN",
@@ -471,17 +624,49 @@ class ProfileRestartRecoveryMonitor:
                 restart_role=getattr(event, "role", ""),
                 restart_cursor=getattr(event, "cursor", 0),
                 evidence_refs=ProfileCommandSender._evidence_refs([event]),
+                epoch=self.epoch,
             )
+            def restart_guard() -> Any | None:
+                for candidate in self.manager.since(dict(self.cursors)):
+                    if self._event_matches(candidate, phase="restart"):
+                        return candidate
+                return None
+
             recovery = ProfileRecoveryStateMachine(self.profile, self.artifacts, self.manager).run(
                 self.initialization_timeout_s,
                 cursors=baseline,
                 recovery_reason="restart",
+                epoch=self.epoch,
+                restart_guard=restart_guard,
+                stable_for_s=self.stable_for_s,
             )
             self.history.append(recovery)
-            self.cursors = dict(self.manager.snapshot())
-            return [recovery]
-        self.cursors = progressed
-        return []
+            recovered.append(recovery)
+            if recovery.get("status") == "CANCELLED":
+                self.artifacts.emit(
+                    "PROFILE_RECOVERY_CANCELLED",
+                    level="WARN",
+                    message="恢复期间检测到新的重启，旧 epoch 恢复已取消。",
+                    epoch=self.epoch,
+                    reason="restart_detected_during_recovery",
+                    raw={"restart_event": self._event_payload(recovery.get("restart_event"))},
+                )
+                continue
+            return recovered
+        return recovered
+
+    def _event_matches(self, event: Any, *, phase: str) -> bool:
+        sender = ProfileCommandSender(self.profile, self.artifacts, lambda _command, _port: "", self.manager)
+        return sender._event_matches(self.profile.restart_patterns, event, phase=phase)
+
+    @staticmethod
+    def _event_payload(event: Any) -> dict[str, Any]:
+        return {
+            "port": getattr(event, "port", ""),
+            "role": getattr(event, "role", ""),
+            "cursor": getattr(event, "cursor", ""),
+            "line": getattr(event, "line", ""),
+        }
 
     def stop(self) -> None:
         self._stop.set()

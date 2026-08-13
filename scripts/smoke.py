@@ -28,6 +28,10 @@ def run_smoke(connection: ConnectionSpec, profile_path: Path, *, hardware: bool 
     runtime = None
     try:
         profile = DeviceProfile.load(profile_path)
+        artifacts.configure_health_policy(profile.health_policy)
+        # Generic smoke has no business corpus, but it must still create the
+        # immutable case ledger before probing hardware or sending commands.
+        artifacts.freeze_cases([], profile_version=profile.schema_version, profile_sha256=profile.sha256)
         artifacts.set_capability("profile", "PASS", "profile loaded", profile_id=profile.profile_id, profile_sha256=profile.sha256)
         capture = SerialManager(connection.ports, artifacts)
         player = PlaybackBackend(artifacts, connection.playback_device_key)
@@ -58,7 +62,14 @@ def run_smoke(connection: ConnectionSpec, profile_path: Path, *, hardware: bool 
                 artifacts.set_capability("serial", "PASS", "declared ports opened", ports=list(connection.to_dict()["ports"]))
             init_cursor = capture.snapshot()
             init_events = capture.wait_for(
-                lambda events: any(profile.match_any(profile.initialization_patterns, item.line) for item in events),
+                lambda events: any(profile.match_any(
+                    profile.initialization_patterns,
+                    item.line,
+                    port=item.port,
+                    role=item.role,
+                    phase="smoke_initialization",
+                    monotonic_seconds=item.monotonic_seconds,
+                ) for item in events),
                 3.0,
                 cursors=init_cursor,
             ) if not capture.open_failures else []

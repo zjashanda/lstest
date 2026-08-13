@@ -1,26 +1,80 @@
-# lstest 结果日志标准
+# lstest 结果与工具日志标准
 
-每个任务目录至少包含：
-
-- `task_config.json`：输入、profile 路径/hash、声卡、端口和版本；播放目标明确标记为 `system_default_render` 或 `specified_device_key`。
-- `task.log`：北京时间毫秒、人读动作、结果、耗时、ID/ASR/意图、原因和证据位置。
-- `task_events.jsonl`：完整结构化事件，供重建和机器分析。
-- `errors.log`、`progress.json`、`results.csv`、`summary_final.json`、`summary_final.md`。
-- `serial_logs/serial_<port>_<role>.log`：分端口连续原始证据；串口采集只保留此 `.log`，不创建 `.bin` 原始字节文件，也不默认创建 `serial_merged.log`。
-- `tool_logs/`：播放器、在线计时和其他工具原始输出；其中 `exception_summary.log` 在每轮结束后追加任务级累计异常快照，轮次块之间必须空一行，`recognition_raw.log` 保存每条离线/在线识别的原始字段，`broadcast_recognition_anomalies.jsonl` 保存播报-识别一对一异常，`wake_word_verification.log` 保存多唤醒词逐项确认及无播报/多结果异常，`initialization_recovery.jsonl` 保存每次启动/重启后的初始化 marker、每条命令的发送次数、回执/旁证、证据引用、重试和最终结果，`player_lifecycle.jsonl` 保存每个播放器状态事件。
-
-设备命令恢复事件必须包含初始化等待、重启 marker（如有）、命令、端口/角色、尝试次数、最大次数、直接回执、验证来源（`direct_ack`、`serial_ack` 或 `serial_evidence`）、回执/旁证规则、耗时和串口证据引用。重试耗尽或未找到旁证必须写入 `errors.log`、结构化事件和任务级异常统计，不能把“无输出”写成成功。
-
-关联和耗时必须同时保存规范化字段与项目原生字段。无最终识别、未配对 ID 或无播放器生命周期时，不得伪造耗时或物理播放 PASS。
-
-`player_lifecycle.jsonl` 的每条记录必须包含时间、事件、`lifecycle_status`、来源（主机播放器或设备 marker）、用例和 `broadcast_id`、音频、播放目标/模式、播放器脚本、工具状态和证据引用。主机播放至少记录 `REQUESTED`、`PROCESS_STARTED`、`COMPLETED`、`FAILED`、`TIMEOUT` 或 `BLOCKED`，并记录超时、退出码、耗时和原始工具输出文件；设备侧 marker 记录原始 marker、规范化 `REQUEST`/`PREPARED`/`START`/`PAUSE`/`STOP`/`END`/`ERROR`、端口、原始行和串口证据引用。主机进程成功只能说明播放命令已完成，`device_playback_status` 必须保持 `UNVERIFIED`；只有项目设备侧 `START`/`END` 等 marker 才能作为设备播放旁证。主机播放失败、超时、阻塞或设备 `ERROR` marker 必须写入异常统计并使当前通过轮变为 `FAIL`。
-
-关键人读日志必须能直接看出三类判定：
+从本版本开始，新任务的结果目录只保留四类产物。旧任务目录不迁移、不删除、不改写。
 
 ```text
-[WAKEUP] wake_keyword: xiao ti xiao ti | wakeup_status: PASS
-[COMMAND] keyword: da kai kong tiao | intent: da kai kong tiao | command_status: PASS
-[ONLINE] queryId: abc_0 | asr.text: 今天的天气 | online_status: PASS | latency_ms: 812
+result/YYYYMMDD_HHMMSS_<task>/
+├── serial_logs/
+│   └── serial_<port>_<role>.log
+├── tool.log
+├── results.csv
+└── cases.csv
 ```
 
-设备原始 `keyword`、`intent`、ASR 文本、在线 ID 和播放器 marker 不得翻译。离线算法拼音结果必须原样写出，例如 `keyword: ni3 hao3 kong1 tiao2 | intent: ni3 hao3 kong1 tiao2`；规范化中文只能追加在 `normalized`，不得覆盖 `raw_tags` 或工具日志中的原始字段。工具侧只追加 `tool_status`、`tool_reason`、预期值、实际值、耗时和证据引用。终端与 `task.log` 的关键人读行必须一致，原始完整串口内容以分端口 `.log` 文件为准。`progress.json` 和 `summary_final.json` 必须保留从任务开始到结束不清零的 `exception_counts`、`exception_total`、`anomaly_counts`、`anomaly_total` 和 `sticky_counts`；异常状态以非 `PASS`、非 `EXPECTED` 的最终用例状态累计，串口重连或设备重启不得清零。
+## 四类产物职责
+
+- `serial_logs/`：按端口和角色持续保存设备原始串口输出。每行格式为 `[北京时间] COMx role #cursor 原始内容`；`#cursor` 与人读行号一一对应。它是设备事实源，工具日志只引用相对路径和 `#cursor`，不复制大段串口内容，也不生成 `.bin` 或合并日志。
+- `tool.log`：唯一完整的文本工具执行账本。它记录脚本动作、配置、命令、回执、旁证、重试、初始化/重启恢复、播放器生命周期、播报-识别关联、异常、健康策略、每轮检查矩阵、累计统计和最终结论。
+- `results.csv`：每个完成或中断的逻辑轮次一行，运行中立即刷新。重试仍属于同一轮，不能被误统计为额外样本。
+- `cases.csv`：在打开串口、播放音频或发送设备命令之前冻结最终用例顺序。运行中不得重写。
+
+所有文本使用 UTF-8，两个 CSV 使用 UTF-8 BOM。用户停止时保留已存在的四类产物；`tool.log` 记录停止与收尾，`results.csv` 保留完成轮及当前 `ABORTED` 轮。除用户创建的临时 `STOP` 控制文件外，目录不应出现其他默认产物。
+
+## tool.log 固定事件块
+
+每个事件块之间空一行，固定字段顺序如下；不适用字段写 `-`：
+
+```text
+time: 2026-08-13 12:00:00.123
+level: INFO
+event: SERIAL_COMMAND_VALIDATED
+task_id: 20260813_120000_project_stress
+epoch: 2
+round: 17
+case_id: offline-017
+phase: initialization_recovery
+source: -
+device: -
+port_role: COM11/csk
+action_id: -
+broadcast_id: broadcast-000017
+correlation_id: requestId-raw-value
+status: PASS
+reason: serial_ack
+attempt: 2
+max_attempts: 2
+elapsed_ms: 184
+rule_id: profile.commands[0]
+expected: {"keyword":"ni3 hao3 kong1 tiao2"}
+actual: {"keyword":"ni3 hao3 kong1 tiao2"}
+raw: {"keyword":"ni3 hao3 kong1 tiao2","intent":"ni3 hao3 kong1 tiao2"}
+normalized: {"keyword_text":"你好空调"}
+handling: continue
+evidence: ["serial_logs/serial_COM11_csk.log#208"]
+message: 初始化命令已验证成功。
+details: {...}
+```
+
+必须记录：任务配置和 profile hash；每次命令发送/回执/旁证/超时/重试；每次播放器探测、请求、进程启动、退出、超时、stdout/stderr 与设备 marker；每个唤醒、离线和在线原始识别结果；所有关联 ID；异常栈和继续/停止处理；每轮 required/optional 检查矩阵、累计异常；最终统计、首个失败、首个严重异常、停止原因和四类文件路径。
+
+离线 `keyword`、`intent`，在线服务原文、请求/响应 ID 和设备 marker 必须原样位于 `raw`；项目转换结果只能写入 `normalized`。日志同时记录 `raw_exact_status` 与 `semantic_status`。例如期望“二十五度”、实际“25度”时，只有 profile 明确允许该原始变体才可使 `semantic_status: PASS`，原始严格状态仍是 `FAIL`。
+
+## 初始化与重启恢复
+
+恢复流程必须在 `tool.log` 逐步记录：初始化 marker、epoch、稳定窗口、安全命令、端口/角色、尝试次数、直接回执、串口回执或发送后旁证、规则、耗时和证据。沉默不得判为成功。失败后按 profile 重试；耗尽时记录 `INITIALIZATION_RECOVERY_FAILED`，默认捕获异常并继续后续可执行轮次。
+
+运行中发现 restart marker 时建立新 epoch 并关闭旧用例窗口。恢复过程中再次发现 restart 时必须记录旧恢复 `CANCELLED`，且旧 epoch 不得继续发送命令；新 epoch 完成初始化 marker 和稳定窗口后才重新恢复。
+
+## results.csv 稳定列
+
+`results.csv` 至少包含：轮次、用例、起止时间、epoch、场景、语料、音频/hash、`broadcast_id`、唤醒与离线识别尝试次数及原始字段、在线原生请求/响应 ID 与原始响应、播放器状态、设备播放器状态、各项耗时、关联有效性、`raw_exact_status`、`semantic_status`、检查矩阵摘要、原始/复核/最终状态、异常码、原因、证据和完整事实 JSON。
+
+在线耗时仅在请求、响应、CaseWindow、epoch 和关联规则均唯一有效时填写；任何一个条件缺失、重复或跨用例时保留原始字段并将耗时留空，不能填零。最终统计必须重新读取 `results.csv`，有效分母排除 `BLOCKED`、`ABORTED` 和 `SKIPPED`。
+
+## cases.csv 稳定列
+
+冻结用例至少包含：`case_order`、`case_id`、`scenario`、`input_text`、`audio_path`、`audio_sha256`、唤醒/离线/在线期望原始值、`accepted_raw_variants`、来源文件/hash、随机种子和 profile 版本/hash。项目适配器完成读取、排序或随机化后立刻调用 `ScenarioRuntime.freeze_cases(...)`，然后才允许设备动作。
+
+## 迁移要求
+
+这是 breaking change。新项目适配 Skill 不得读取或创建 `task.log`、`tool_logs/`、`task_events.jsonl`、`errors.log`、`progress.json` 或 `summary_final.*`。需要机器统计时读取 `results.csv`；需要动作复盘时解析固定字段 `tool.log`；需要设备原始事实时读取对应分端口串口日志。旧历史目录保持原格式，不要求转换。
