@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterable, Mapping
 from .core import CaseResult, TaskArtifacts, sha256_file
 from .observations import RawTag, ToolJudgement, judge_wakeup
 from .playback import PlaybackBackend
+from .profile import DeviceProfile, EVENT_REGISTRY, ProfileFact, RawLogRecord
 
 
 @dataclass
@@ -166,11 +167,13 @@ class ScenarioRuntime:
         *,
         playback_device_key: str | None = None,
         playback_script: Path | None = None,
+        profile: DeviceProfile | None = None,
         wake_words: Iterable[Mapping[str, Any]] = (),
         health_recovery: Callable[[str, Mapping[str, Any]], Any] | None = None,
     ) -> None:
         self.artifacts = artifacts
         self.player = PlaybackBackend(artifacts, playback_device_key, playback_script)
+        self.profile = profile
         self.broadcast_tracker = BroadcastRecognitionTracker()
         self._next_broadcast_index = 0
         self._recognition_associations: dict[str, list[dict[str, Any]]] = {}
@@ -191,8 +194,19 @@ class ScenarioRuntime:
         profile_sha256: Any = "",
     ) -> int:
         """Freeze the adapter's final case sequence before any device action."""
+        frozen_cases = list(cases)
+        if self.profile is not None and self.profile.is_formal:
+            required_types: set[str] = set()
+            for item in frozen_cases:
+                metadata = getattr(item, "metadata", {}) if not isinstance(item, Mapping) else item.get("metadata", item)
+                contract = self.profile.case_contract(metadata if isinstance(metadata, Mapping) else {})
+                required_keys = {str(key).upper() for key in contract.get("required_facts", ())}
+                for event_type, registry in EVENT_REGISTRY.items():
+                    if registry["key"] in required_keys:
+                        required_types.add(event_type)
+            self.profile.assert_formal_ready(required_types)
         return self.artifacts.freeze_cases(
-            cases,
+            frozen_cases,
             random_seed=random_seed,
             profile_version=profile_version,
             profile_sha256=profile_sha256,
@@ -201,6 +215,99 @@ class ScenarioRuntime:
     def current_wake_word(self) -> dict[str, Any]:
         """Return the only wake word currently allowed by the ordered requirements table."""
         return self.wake_word_sequence.current()
+
+    def submit_raw_record(self, record: RawLogRecord | Mapping[str, Any], *, case_id: str) -> list[ProfileFact]:
+        """Submit one raw source record through the project profile.
+
+        This is the only supported device/cloud/player fact entry point for
+        new project adapters. The profile decides what matches and which
+        capture is displayed; the runtime only preserves arrival order and
+        forwards the extracted device-native value to the timeline ledger.
+        """
+        if self.profile is None:
+            raise RuntimeError("profile-driven raw record submission requires a DeviceProfile")
+        if isinstance(record, Mapping):
+            raw = RawLogRecord(
+                text=str(record.get("text", record.get("line", ""))),
+                source=str(record.get("source", "")),
+                port=str(record.get("port", "")),
+                role=str(record.get("role", "")),
+                cursor=int(record["cursor"]) if record.get("cursor") not in (None, "") else None,
+                observed_at=str(record.get("observed_at", record.get("timestamp", ""))),
+                sequence=int(record.get("sequence", 0) or 0),
+                epoch=int(record.get("epoch", self.artifacts.current_epoch) or 0),
+                phase=str(record.get("phase", "")),
+                evidence=tuple(
+                    str(item) for item in (
+                        [record.get("evidence")] if isinstance(record.get("evidence"), (str, bytes)) else record.get("evidence", ())
+                    ) if str(item)
+                ),
+            )
+        else:
+            raw = record
+        if not raw.text:
+            return []
+        refs = raw.evidence or (() if raw.cursor is None or not raw.port else (
+            f"serial_logs/serial_{raw.port}_{raw.role or 'unknown'}.log#{raw.cursor}",
+        ))
+        if refs != raw.evidence:
+            raw = RawLogRecord(
+                text=raw.text, source=raw.source, port=raw.port, role=raw.role,
+                cursor=raw.cursor, observed_at=raw.observed_at, sequence=raw.sequence,
+                epoch=raw.epoch, phase=raw.phase, evidence=refs,
+            )
+        facts = self.profile.extract_facts(raw)
+        for fact in facts:
+            if fact.event_type == "player_state":
+                self.artifacts.timeline_player(
+                    case_id,
+                    fact.presentation_value,
+                    port=fact.port,
+                    role=fact.role,
+                    phase=fact.phase,
+                    identity=fact.identity,
+                    mirror_policy=fact.mirror_policy,
+                    evidence=fact.evidence,
+                    state_class=fact.state_class,
+                    render_policy=fact.render_policy,
+                )
+            else:
+                self.artifacts.timeline_fact(
+                    case_id,
+                    fact.key,
+                    fact.presentation_value,
+                    tag=fact.tag,
+                    port=fact.port,
+                    role=fact.role,
+                    phase=fact.phase,
+                    identity=fact.identity,
+                    mirror_policy=fact.mirror_policy,
+                    evidence=fact.evidence,
+                )
+            self._update_case_facts(
+                case_id,
+                profile_facts=[
+                    *list(self._case_facts.get(case_id, {}).get("profile_facts", ()),),
+                    {
+                        "event_type": fact.event_type,
+                        "key": fact.key,
+                        "display": fact.presentation_value,
+                        "captures": dict(fact.captures),
+                        "rule_id": fact.rule_id,
+                        "evidence": list(fact.evidence),
+                    },
+                ],
+            )
+        safety_reason = self.profile.safety_stop_reason(facts)
+        if safety_reason:
+            self.artifacts.request_stop(
+                "PROFILE_SAFETY_STOP", safety_reason, case_id=case_id, evidence=refs,
+            )
+        return facts
+
+    def _reject_legacy_fact_api(self, api: str) -> None:
+        if self.profile is not None and self.profile.is_formal:
+            raise RuntimeError(f"{api} 不适用于正式 profile；项目适配器必须调用 submit_raw_record")
 
     def open_case_window(self, case_id: str, *, cursors: Mapping[str, int] | None = None) -> CaseWindow:
         """Open the only recognition scope allowed to consume this case's results."""
@@ -223,16 +330,7 @@ class ScenarioRuntime:
             "scenario": frozen.get("scenario", ""),
             "input_text": frozen.get("input_text", ""),
         })
-        self.artifacts.emit(
-            "CASE_WINDOW_OPENED",
-            message=f"开始执行用例：{key}。",
-            case_id=key,
-            epoch=window.epoch,
-            phase="case_open",
-            scenario=frozen.get("scenario", ""),
-            input_text=frozen.get("input_text", ""),
-            raw=window.to_dict(),
-        )
+        self.artifacts.timeline_case_start(key, epoch=window.epoch)
         return window
 
     @staticmethod
@@ -283,6 +381,7 @@ class ScenarioRuntime:
         method deliberately does not infer IDs from a later response: without
         a recorded request, `results.csv` leaves online timing empty.
         """
+        self._reject_legacy_fact_api("record_online_request")
         payload = dict(raw_values)
         raw_id = str(request_id or self._first_value(payload, "request_id", "requestId", "queryId", "traceId", "id")).strip()
         refs = [str(item) for item in evidence_refs]
@@ -309,17 +408,9 @@ class ScenarioRuntime:
                 current=record,
             )
             record["duplicate"] = True
-        self.artifacts.emit(
-            "ONLINE_REQUEST_RECORDED",
-            level="WARN" if previous is not None else "INFO",
-            message="已记录在线原生请求，等待同一关联 ID 的最终响应。",
-            case_id=case_id,
-            epoch=self.artifacts.current_epoch,
-            phase="online_request",
-            correlation_id=raw_id,
-            status="PENDING",
-            raw=payload,
-            evidence=refs,
+        self.artifacts.timeline_fact(
+            case_id, "REQUEST_ID", raw_id,
+            evidence=refs, phase="online_request", identity=raw_id,
         )
         self._update_case_facts(
             case_id,
@@ -471,6 +562,8 @@ class ScenarioRuntime:
         expected_recognition: Mapping[str, Any] | None = None,
         accepted_raw_variants: Mapping[str, Any] | list[Mapping[str, Any]] | None = None,
         timeout: float = 120.0,
+        spoken_text: str | None = None,
+        phase: str = "command",
     ) -> dict[str, Any]:
         """播放音频，并建立与期望原始识别字段一一对应的播报窗口。"""
         self.artifacts.require_cases_frozen("audio_playback")
@@ -500,13 +593,11 @@ class ScenarioRuntime:
                 "device_playback_status": "UNVERIFIED",
             },
         )
-        self.artifacts.emit(
-            "BROADCAST_STARTED",
-            message=f"开始播放 {audio_file.name}。",
-            task_log=True,
-            playback_name="command",
-            input_text=self.artifacts.case_metadata(case_id).get("input_text", ""),
-            **broadcast,
+        self.artifacts.timeline_action(
+            case_id,
+            text=spoken_text if spoken_text is not None else self.artifacts.case_metadata(case_id).get("input_text", ""),
+            audio_file=audio_file,
+            phase=phase,
         )
         try:
             ok = self.player.play(audio_file, case_id=case_id, broadcast_id=broadcast_id, timeout=timeout)
@@ -593,6 +684,11 @@ class ScenarioRuntime:
         port: str | None = None,
         raw_line: str = "",
         evidence_refs: Iterable[str] = (),
+        presentation_value: str | None = None,
+        play_url: str = "",
+        device_broadcast_id: str = "",
+        state_class: str = "",
+        render_policy: str = "all",
     ) -> dict[str, Any]:
         """Record a project player marker and make device-side errors actionable.
 
@@ -600,6 +696,7 @@ class ScenarioRuntime:
         Project adapters call this method for serial/device player markers to
         prove device-side start/end or retain the exact marker on failure.
         """
+        self._reject_legacy_fact_api("record_player_marker")
         refs = tuple(str(item) for item in evidence_refs)
         broadcast = self.broadcast_tracker.broadcasts.get(str(broadcast_id or ""), {})
         audio_file = Path(str(broadcast["audio_file"])) if broadcast.get("audio_file") else None
@@ -611,8 +708,20 @@ class ScenarioRuntime:
             port=port,
             raw_line=raw_line,
             evidence_refs=refs,
+            state_class=state_class,
         )
-        if record.get("player_state") == "ERROR":
+        self.artifacts.timeline_player(
+            case_id,
+            presentation_value if presentation_value is not None else marker,
+            broadcast_id=str(broadcast_id or ""),
+            play_url=play_url,
+            device_broadcast_id=device_broadcast_id,
+            duration_ms=record.get("duration_ms"),
+            evidence=refs,
+            state_class=state_class,
+            render_policy=render_policy,
+        )
+        if record.get("player_state") == "error":
             anomaly = self.artifacts.record_anomaly(
                 "PLAYER_DEVICE_MARKER_ERROR",
                 f"设备侧播放器返回异常 marker: {marker}。",
@@ -823,6 +932,12 @@ class ScenarioRuntime:
         evidence_refs: Iterable[str] = (),
         suppress_content_mismatch: bool = False,
         human_log: bool = True,
+        presentation_field: str | None = None,
+        duration_ms: int | None = None,
+        port: str = "",
+        role: str = "",
+        identity: str = "",
+        mirror_policy: str | None = None,
     ) -> dict[str, Any]:
         """Record raw device recognition before any project-side normalization.
 
@@ -831,6 +946,7 @@ class ScenarioRuntime:
         supplied unchanged for ``keyword``/``intent``.  Normalized text is
         stored separately and can never overwrite the raw tag value.
         """
+        self._reject_legacy_fact_api("record_recognition")
         source_name = str(source or "").strip().lower()
         if source_name not in {"offline", "online"}:
             raise ValueError("recognition source must be offline or online")
@@ -854,8 +970,47 @@ class ScenarioRuntime:
             case_id=case_id,
             recognition_source=source_name,
             evidence_refs=refs,
-            human_log=human_log,
+            # The timeline below renders exactly one configured raw field.
+            # ``emit_observation`` remains for structured compatibility only.
+            human_log=False,
         )
+        if human_log:
+            if source_name == "offline":
+                selected = presentation_field or next(
+                    (name for name in ("keyword", "intent", "text", "asr_text") if raw_payload.get(name) not in (None, "")),
+                    "",
+                )
+                if selected:
+                    self.artifacts.timeline_fact(
+                        case_id, "OFFLINE_ASR", raw_payload.get(selected), evidence=refs,
+                        phase="offline_asr", port=port, role=role, identity=identity,
+                        mirror_policy=mirror_policy or "distinct",
+                        duration_ms=duration_ms if duration_ms is not None else (judgement.duration_ms if judgement else None),
+                    )
+            else:
+                response_id = self._first_value(raw_payload, "response_id", "responseId", "resultId", "id")
+                if response_id:
+                    self.artifacts.timeline_fact(
+                        case_id, "RESPONSE_ID", response_id, evidence=refs,
+                        phase="online_response", port=port, role=role, identity=identity or response_id,
+                        mirror_policy=mirror_policy or "distinct",
+                    )
+                selected = presentation_field or next(
+                    (name for name in ("asr_text", "text", "asr", "result") if raw_payload.get(name) not in (None, "")),
+                    "",
+                )
+                if selected:
+                    broadcast = self.broadcast_tracker.broadcasts.get(str(broadcast_id or ""), {})
+                    e2e_ms = None
+                    if broadcast and int(broadcast.get("epoch", -1)) == self.artifacts.current_epoch:
+                        e2e_ms = round((time.monotonic() - float(broadcast.get("started_monotonic", time.monotonic()))) * 1000)
+                    self.artifacts.timeline_fact(
+                        case_id, "ONLINE_ASR", raw_payload.get(selected), evidence=refs,
+                        phase="online_response", port=port, role=role, identity=identity or online_correlation.get("request_id", ""),
+                        mirror_policy=mirror_policy or "distinct",
+                        duration_ms=online_correlation.get("recognition_latency_ms") if online_correlation.get("valid") else None,
+                        e2e_duration_ms=e2e_ms,
+                    )
         tool_entry = {
             "channel": channel,
             "case_id": case_id,
@@ -955,6 +1110,7 @@ class ScenarioRuntime:
         pass it here.  A generic wake-up marker is not sufficient when a
         device has several active wake words.
         """
+        self._reject_legacy_fact_api("record_wakeup")
         requirement = dict(wake_word)
         wake_word_id = str(requirement.get("wake_word_id") or "").strip()
         spoken_text = str(requirement.get("spoken_text") or "").strip()

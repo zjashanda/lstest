@@ -74,20 +74,9 @@ class PlaybackBackend:
             "player_script": str(self.script),
             **fields,
         }
-        self.artifacts.emit(
-            event,
-            level=level,
-            message=message,
-            task_log=True,
-            phase="playback",
-            status=fields.get("tool_status", ""),
-            raw=record,
-            **{
-                key: value
-                for key, value in record.items()
-                if key not in {"event", "level", "message"}
-            },
-        )
+        # Host player lifecycle is internal evidence.  The human timeline is
+        # driven by the device-side marker regex submitted by the adapter.
+        # ScenarioRuntime records host failures as normal ERROR facts.
         return record
 
     @staticmethod
@@ -120,7 +109,10 @@ class PlaybackBackend:
             )
         except subprocess.TimeoutExpired as error:
             duration_s = round(time.monotonic() - started, 3)
-            self.artifacts.write_tool_log("player_probe_timeout", self._timeout_output(error))
+            self.artifacts.record_anomaly(
+                "PLAYER_PROBE_TIMEOUT", "播放器探测超时。",
+                evidence_refs=(), handling="记录后继续", output=self._timeout_output(error)[-500:],
+            )
             self._record_lifecycle(
                 "PROBE_TIMEOUT", event="PLAYER_PROBE_TIMEOUT", level="ERROR",
                 message=f"播放器探测超时，已等待 {duration_s:.3f}s。", timeout_s=30.0,
@@ -135,7 +127,6 @@ class PlaybackBackend:
             return False
         ok = completed.returncode == 0
         output = completed.stdout or completed.stderr or ""
-        self.artifacts.write_tool_log("player_probe", output)
         duration_s = round(time.monotonic() - started, 3)
         self._record_lifecycle(
             "PROBE_COMPLETED" if ok else "PROBE_FAILED",
@@ -193,18 +184,16 @@ class PlaybackBackend:
             )
         except subprocess.TimeoutExpired as error:
             duration_s = round(time.monotonic() - started, 3)
-            self.artifacts.write_tool_log(
-                f"play_{case_id or audio.stem}.log", self._timeout_output(error),
-            )
+            timeout_output = self._timeout_output(error)[-500:]
             self.last_playback.update({
                 "status": "TIMEOUT", "reason": "player_process_timeout", "duration_s": duration_s,
-                "evidence": "tool.log",
+                "evidence": "",
             })
             self._record_lifecycle(
                 "TIMEOUT", event="HOST_AUDIO_TIMEOUT", level="ERROR",
                 message=f"主机播放器超时，已等待 {duration_s:.3f}s。",
                 case_id=case_id, broadcast_id=broadcast_id, audio=audio, timeout_s=timeout_s,
-                duration_s=duration_s, evidence="tool.log", tool_status="FAIL",
+                duration_s=duration_s, evidence="", tool_status="FAIL", tool_output=timeout_output,
                 device_playback_status="UNVERIFIED", error=f"{type(error).__name__}: {error}",
             )
             return False
@@ -218,7 +207,6 @@ class PlaybackBackend:
             return False
         ended = time.monotonic()
         output = (completed.stdout or "") + (completed.stderr or "")
-        self.artifacts.write_tool_log(f"play_{case_id or audio.stem}.log", output)
         duration_s = round(ended - started, 3)
         ok = completed.returncode == 0
         self.last_playback.update({
@@ -226,7 +214,7 @@ class PlaybackBackend:
             "reason": "host_player_completed" if ok else "player_returncode_nonzero",
             "returncode": completed.returncode,
             "duration_s": duration_s,
-            "evidence": "tool.log",
+            "evidence": "",
         })
         self._record_lifecycle(
             "COMPLETED" if ok else "FAILED", event="HOST_AUDIO_END",
@@ -236,7 +224,7 @@ class PlaybackBackend:
                 if ok else f"主机播放器返回失败，退出码 {completed.returncode}。"
             ),
             case_id=case_id, broadcast_id=broadcast_id, audio=audio,
-            returncode=completed.returncode, duration_s=duration_s, evidence="tool.log",
+            returncode=completed.returncode, duration_s=duration_s, evidence="",
             tool_status="PASS" if ok else "FAIL", device_playback_status="UNVERIFIED",
             tool_output=output[-500:],
         )
@@ -252,10 +240,11 @@ class PlaybackBackend:
         port: str | None = None,
         raw_line: str = "",
         evidence_refs: tuple[str, ...] = (),
+        state_class: str = "",
     ) -> dict[str, Any]:
         """记录项目原始播放器 marker，并附加公共生命周期状态。"""
         observed_at = time.monotonic()
-        normalized = self.normalizer.observe(marker)
+        normalized = self.normalizer.observe(marker, state_class=state_class)
         record = {
             **normalized,
             "case_id": case_id,
@@ -269,19 +258,19 @@ class PlaybackBackend:
         self.lifecycle.append(record)
         state = normalized.get("player_state")
         context = broadcast_id or case_id or "unassociated"
-        if state in {"START", "PREPARED", "REQUEST"}:
+        if state == "active":
             self._lifecycle_times.setdefault((context, str(state)), observed_at)
-        if state == "END" and (context, "START") in self._lifecycle_times:
-            record["duration_ms"] = round((observed_at - self._lifecycle_times[(context, "START")]) * 1000)
-        if state == "ERROR":
+        if state == "terminal" and (context, "active") in self._lifecycle_times:
+            record["duration_ms"] = round((observed_at - self._lifecycle_times[(context, "active")]) * 1000)
+        if state == "error":
             record["tool_status"] = "FAIL"
-        level = "ERROR" if state == "ERROR" else ("INFO" if state else "WARN")
+        level = "ERROR" if state == "error" else ("INFO" if state else "WARN")
         lifecycle = self._record_lifecycle(
-            f"DEVICE_{state}" if state else "DEVICE_UNKNOWN_MARKER",
+            "DEVICE_PLAYER_EVENT",
             event="PLAYER_LIFECYCLE", level=level,
             message=f"播放器 marker: {marker}；state={state or 'UNKNOWN'}。",
             source="device_marker",
-            device_playback_status=("FAILED" if state == "ERROR" else ("OBSERVED" if state else "UNKNOWN")),
+            device_playback_status=("FAILED" if state == "error" else ("OBSERVED" if state else "UNKNOWN")),
             **record,
         )
         return {**record, "lifecycle_log": str(self.artifacts.tool_log_path)}
@@ -312,21 +301,25 @@ class CaptureBackend:
 
 
 class PlayerEventNormalizer:
-    """Maps project marker names to a stable player lifecycle vocabulary."""
+    """Carry profile-classified state without interpreting device marker text."""
 
-    STATES = {"REQUEST", "PREPARED", "START", "PAUSE", "STOP", "END", "ERROR"}
+    STATE_CLASSES = {"preparation", "active", "terminal", "error", "unknown"}
 
     def __init__(self, mapping: dict[str, str] | None = None):
+        # ``mapping`` remains for callers that explicitly supply a profile
+        # mapping. There is intentionally no marker.upper() fallback.
         self.mapping = mapping or {}
 
-    def normalize(self, marker: str) -> str | None:
-        state = self.mapping.get(marker, marker.upper())
-        return state if state in self.STATES else None
+    def normalize(self, marker: str, state_class: str = "") -> str | None:
+        state = state_class or self.mapping.get(marker, "")
+        normalized = str(state).lower()
+        return normalized if normalized in self.STATE_CLASSES else None
 
-    def observe(self, marker: str) -> dict[str, str | None]:
-        """保留原始播放器 marker，并给出可比较的生命周期状态。"""
+    def observe(self, marker: str, *, state_class: str = "") -> dict[str, str | None]:
+        """Keep the actual marker untouched; classification is profile input."""
+        classification = self.normalize(marker, state_class)
         return {
             "raw_marker": marker,
-            "player_state": self.normalize(marker),
-            "tool_status": "OBSERVED" if self.normalize(marker) else "WARN",
+            "player_state": classification,
+            "tool_status": "OBSERVED" if classification else "WARN",
         }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import tempfile
 import time
 import unittest
@@ -226,6 +227,21 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(artifacts.cases_path.read_bytes()[:3], b"\xef\xbb\xbf")
             self.assertEqual(artifacts.results_path.read_bytes()[:3], b"\xef\xbb\xbf")
 
+    def test_results_reconcile_supports_large_auditable_facts_json(self):
+        """A valid compat summary must not hit csv's small default field cap."""
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "large-facts")
+            self._freeze(artifacts, "case-a")
+            artifacts.record_case(CaseResult(
+                "case-a",
+                "PASS",
+                reason="fixture",
+                facts={"child_summary": "x" * (csv.field_size_limit() + 1)},
+            ))
+            summary = artifacts.finalize("PASS", "fixture complete")
+            self.assertEqual(summary["status"], "PASS")
+            self.assertEqual(summary["completed"], 1)
+
     def test_playback_requires_cases_to_be_frozen(self):
         with tempfile.TemporaryDirectory() as directory:
             artifacts = TaskArtifacts(Path(directory), "freeze-required")
@@ -365,11 +381,11 @@ class FoundationTests(unittest.TestCase):
     def test_tool_log_and_player_marker_keep_raw_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             artifacts = TaskArtifacts(Path(directory), "tool-output")
-            path = artifacts.write_tool_log("player.log", "tone player evt: 1\n")
-            self.assertIn("tone player evt: 1", path.read_text(encoding="utf-8"))
-            normalized = PlayerEventNormalizer({"tone player evt: 1": "START"}).observe("tone player evt: 1")
+            with self.assertRaises(RuntimeError):
+                artifacts.write_tool_log("player.log", "tone player evt: 1\n")
+            normalized = PlayerEventNormalizer({"tone player evt: 1": "START"}).observe("tone player evt: 1", state_class="active")
             self.assertEqual(normalized["raw_marker"], "tone player evt: 1")
-            self.assertEqual(normalized["player_state"], "START")
+            self.assertEqual(normalized["player_state"], "active")
             artifacts.finalize("PASS", "fixture complete")
 
     def test_audio_text_manifest_accepts_csv_and_jsonl(self):
@@ -492,9 +508,10 @@ class FoundationTests(unittest.TestCase):
             runtime.record_case(CaseResult("offline-case", "PASS", reason="fixture"))
             artifacts.finalize("PASS", "fixture complete")
             row = next(__import__("csv").DictReader(artifacts.results_path.open(encoding="utf-8-sig")))
-            self.assertEqual(row["offline_keyword_raw"], "25度")
-            self.assertEqual(row["raw_exact_status"], "FAIL")
-            self.assertEqual(row["semantic_status"], "PASS")
+            facts = __import__("json").loads(row["facts_json"])
+            self.assertEqual(facts["asr"]["keyword"], "25度")
+            self.assertEqual(facts["raw_exact_status"], "FAIL")
+            self.assertEqual(facts["semantic_status"], "PASS")
 
     def test_repeated_recognition_is_aggregated_in_one_results_row(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -511,7 +528,7 @@ class FoundationTests(unittest.TestCase):
             artifacts.finalize("FAIL", "fixture complete")
             rows = list(__import__("csv").DictReader(artifacts.results_path.open(encoding="utf-8-sig")))
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["offline_attempts"], "2")
+            self.assertEqual(__import__("json").loads(rows[0]["facts_json"])["asr"]["attempts"], 2)
 
     def test_online_timing_requires_unique_request_in_current_case_window(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -531,10 +548,11 @@ class FoundationTests(unittest.TestCase):
             runtime.record_case(CaseResult("online-case", "PASS", reason="fixture"))
             artifacts.finalize("PASS", "fixture complete")
             row = next(__import__("csv").DictReader(artifacts.results_path.open(encoding="utf-8-sig")))
-            self.assertEqual(row["online_request_id"], "req-1")
-            self.assertEqual(row["online_response_id"], "resp-1")
-            self.assertEqual(row["correlation_valid"], "True")
-            self.assertTrue(row["recognition_latency_ms"])
+            facts = __import__("json").loads(row["facts_json"])
+            self.assertEqual(facts["online"]["request_id"], "req-1")
+            self.assertEqual(facts["online"]["response_id"], "resp-1")
+            self.assertTrue(facts["correlation"]["valid"])
+            self.assertGreaterEqual(facts["timing"]["recognition_latency_ms"], 0)
 
     def test_online_response_without_recorded_request_leaves_latency_empty(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -553,8 +571,9 @@ class FoundationTests(unittest.TestCase):
             runtime.record_case(CaseResult("online-case", "PASS", reason="fixture"))
             artifacts.finalize("FAIL", "fixture complete")
             row = next(__import__("csv").DictReader(artifacts.results_path.open(encoding="utf-8-sig")))
-            self.assertEqual(row["recognition_latency_ms"], "")
-            self.assertEqual(row["correlation_valid"], "False")
+            facts = __import__("json").loads(row["facts_json"])
+            self.assertEqual(facts["timing"]["recognition_latency_ms"], "")
+            self.assertFalse(facts["correlation"]["valid"])
 
     def test_late_result_after_case_close_is_not_consumed_by_next_case(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -656,13 +675,12 @@ class FoundationTests(unittest.TestCase):
                 broadcast_id=broadcast["broadcast_id"],
                 port="COM9",
                 raw_line="[player] start",
-                evidence_refs=("serial_logs/serial_COM9_player.log#21",),
+                evidence_refs=("serial_logs/serial_COM9_player.log#21",), state_class="active",
             )
-            self.assertEqual(marker["player_state"], "START")
+            self.assertEqual(marker["player_state"], "active")
             lifecycle = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
-            self.assertIn("PLAYER: playing", lifecycle)
-            self.assertIn(broadcast["broadcast_id"], lifecycle)
-            self.assertIn("serial_logs/serial_COM9_player.log#21", lifecycle)
+            self.assertIn("PLAYER: START", lifecycle)
+            self.assertNotIn(broadcast["broadcast_id"], lifecycle)
             artifacts.finalize("PASS", "fixture complete")
 
     def test_player_failure_and_device_error_marker_fail_the_current_case(self):
@@ -681,7 +699,7 @@ class FoundationTests(unittest.TestCase):
             self.assertNotEqual(failed["broadcast_id"], broadcast["broadcast_id"])
             marker = runtime.record_player_marker(
                 "ERROR", case_id="device-failure", broadcast_id=broadcast["broadcast_id"],
-                port="COM9", raw_line="[player] error",
+                port="COM9", raw_line="[player] error", state_class="error",
             )
             self.assertEqual(marker["anomaly_code"], "PLAYER_DEVICE_MARKER_ERROR")
 
@@ -692,7 +710,7 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(summary["anomaly_counts"]["PLAYER_PLAYBACK_FAILED"], 1)
             self.assertEqual(summary["anomaly_counts"]["PLAYER_DEVICE_MARKER_ERROR"], 1)
             lifecycle = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
-            self.assertIn("PLAYER: error", lifecycle)
+            self.assertIn("PLAYER: ERROR", lifecycle)
             self.assertIn("PLAYER_DEVICE_MARKER_ERROR", lifecycle)
 
     def test_host_player_success_and_timeout_are_written_to_lifecycle_log(self):
@@ -712,11 +730,7 @@ class FoundationTests(unittest.TestCase):
             ):
                 self.assertFalse(player.play(audio, case_id="timeout", broadcast_id="broadcast-timeout", timeout=0.1))
             lifecycle = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
-            self.assertIn("PLAYER: request", lifecycle)
-            self.assertIn("PLAYER: playing", lifecycle)
-            self.assertIn("PLAYER: stop", lifecycle)
-            self.assertIn("PLAYER: timeout", lifecycle)
-            self.assertIn("partial output", lifecycle)
+            self.assertNotIn("partial output", lifecycle)
             artifacts.finalize("PASS", "fixture complete")
 
     def test_ordered_wake_word_verification_requires_current_raw_result(self):

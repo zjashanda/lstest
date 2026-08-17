@@ -349,17 +349,14 @@ class ProfileRecoveryStateMachine:
                 "初始化命令恢复未完成，已保留命令尝试、回执和旁证。",
                 recovery=result,
             )
-            recovery_config = self.profile.recovery if hasattr(self.profile, "recovery") else {}
-            if bool(recovery_config.get("stop_on_failure", False)):
-                self.artifacts.stop.request("INITIALIZATION_RECOVERY_FAILED")
-                self.artifacts.emit(
-                    "INITIALIZATION_RECOVERY_STOP_REQUESTED",
-                    level="ERROR",
-                    message="初始化恢复失败，已请求安全停止，避免继续产生无日志结果。",
-                    task_log=True,
-                    recovery_reason=result.get("recovery_reason", ""),
-                    recovery_state=result.get("state", ""),
-                )
+            self.artifacts.emit(
+                "INITIALIZATION_RECOVERY_CONTINUES",
+                level="WARN",
+                message="初始化恢复失败已记录；不属于任务退出条件，继续可执行用例。",
+                task_log=True,
+                recovery_reason=result.get("recovery_reason", ""),
+                recovery_state=result.get("state", ""),
+            )
         return result
 
     def _event_matches(self, patterns: Iterable[Any], event: Any, *, phase: str) -> bool:

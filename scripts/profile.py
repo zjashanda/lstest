@@ -7,7 +7,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 try:
     from .core import sha256_file
@@ -17,6 +17,140 @@ except ImportError:  # direct execution fallback
 
 class ProfileError(ValueError):
     pass
+
+
+EVENT_REGISTRY: Mapping[str, Mapping[str, str]] = {
+    # These are test-flow categories. They deliberately do not name project
+    # markers, regex groups, protocol fields, or any business value.
+    "wake_result": {"key": "WAKE", "tag": "DEVICE", "label": "唤醒"},
+    "offline_result": {"key": "OFFLINE_ASR", "tag": "DEVICE", "label": "离线"},
+    "online_request": {"key": "REQUEST_ID", "tag": "ONLINE", "label": "在线请求"},
+    "online_response": {"key": "RESPONSE_ID", "tag": "ONLINE", "label": "在线响应"},
+    "online_result": {"key": "ONLINE_ASR", "tag": "ONLINE", "label": "在线"},
+    "player_url": {"key": "PLAY_URL", "tag": "PLAYER", "label": "播放地址"},
+    "player_id": {"key": "DEVICE_BROADCAST_ID", "tag": "PLAYER", "label": "设备播报"},
+    "player_state": {"key": "PLAYER", "tag": "PLAYER", "label": "播放器"},
+    "initialization_ready": {"key": "INIT_READY", "tag": "SYSTEM", "label": "初始化"},
+    "restart": {"key": "RESTART", "tag": "SYSTEM", "label": "重启"},
+    "command_ack": {"key": "COMMAND_ACK", "tag": "COMMAND", "label": "命令回执"},
+    "command_evidence": {"key": "COMMAND_EVIDENCE", "tag": "COMMAND", "label": "命令旁证"},
+    "device_exception": {"key": "DEVICE_EXCEPTION", "tag": "ERROR", "label": "设备异常"},
+}
+
+PLAYER_STATE_CLASSES = frozenset({"preparation", "active", "terminal", "error", "unknown"})
+MIRROR_POLICIES = frozenset({"distinct", "mirror", "reject_ambiguous"})
+
+
+@dataclass(frozen=True)
+class RawLogRecord:
+    """One source record submitted by a project adapter.
+
+    The adapter owns collection only.  Project interpretation lives in the
+    profile rule, while rendering and case accounting remain in lstest.
+    """
+
+    text: str
+    source: str = ""
+    port: str = ""
+    role: str = ""
+    cursor: int | None = None
+    observed_at: str = ""
+    sequence: int = 0
+    epoch: int = 0
+    phase: str = ""
+    evidence: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ProfileFact:
+    """A profile-extracted fact whose display text is still device-native."""
+
+    event_type: str
+    key: str
+    tag: str
+    presentation_value: str
+    captures: Mapping[str, str]
+    source: str
+    port: str
+    role: str
+    phase: str
+    identity: str = ""
+    mirror_policy: str = "distinct"
+    state_class: str = ""
+    render_policy: str = "all"
+    evidence: tuple[str, ...] = ()
+    rule_id: str = ""
+    sequence: int = 0
+    epoch: int = 0
+    profile_version: int = 0
+
+
+@dataclass(frozen=True)
+class FixtureResult:
+    name: str
+    passed: bool
+    detail: str = ""
+
+
+class ProfileFixtureRunner:
+    """Replay profile-owned fixtures without any device or project semantics."""
+
+    def __init__(self, profile: "DeviceProfile") -> None:
+        self.profile = profile
+
+    @staticmethod
+    def _sample(value: Any) -> Mapping[str, Any]:
+        return dict(value) if isinstance(value, Mapping) else {"text": str(value)}
+
+    def run(self) -> list[FixtureResult]:
+        results: list[FixtureResult] = []
+        for rule in self.profile.event_rules:
+            rule_id = str(rule["rule_id"])
+            fixtures = rule.get("fixtures", {})
+            for kind, expected in (("positive", True), ("negative", False)):
+                for index, sample in enumerate(fixtures.get(kind, ())):
+                    item = self._sample(sample)
+                    record = RawLogRecord(
+                        text=str(item.get("text", "")), source=str(item.get("source", "")),
+                        port=str(item.get("port", "")), role=str(item.get("role", "")),
+                        phase=str(item.get("phase", "")),
+                    )
+                    facts = [fact for fact in self.profile.extract_facts(record) if fact.rule_id == rule_id]
+                    passed = bool(facts) is expected
+                    detail = ""
+                    if passed and expected and item.get("presentation") is not None:
+                        passed = facts[0].presentation_value == str(item["presentation"])
+                        detail = "展示捕获不一致" if not passed else ""
+                    results.append(FixtureResult(f"{rule_id}:{kind}:{index}", passed, detail))
+            for index, chunks in enumerate(fixtures.get("segmented", ())):
+                joined = "".join(str(chunk) for chunk in chunks)
+                facts = [fact for fact in self.profile.extract_facts(RawLogRecord(text=joined)) if fact.rule_id == rule_id]
+                results.append(FixtureResult(f"{rule_id}:segmented:{index}", bool(facts), "拆包拼接未命中" if not facts else ""))
+        for index, safety in enumerate(self.profile.safety_stop):
+            rule_id = str(safety.get("event_rule_id") or "")
+            fixtures = safety.get("fixtures", {})
+            for kind, expected in (("positive", True), ("negative", False)):
+                for sample_index, sample in enumerate(fixtures.get(kind, ())):
+                    item = self._sample(sample)
+                    facts = [fact for fact in self.profile.extract_facts(RawLogRecord(text=str(item.get("text", "")))) if fact.rule_id == rule_id]
+                    results.append(FixtureResult(
+                        f"safety:{index}:{kind}:{sample_index}", bool(facts) is expected,
+                        "安全停止触发 fixture 不符合预期",
+                    ))
+        return results
+
+    def assert_valid(self) -> None:
+        failed = [item for item in self.run() if not item.passed]
+        if failed:
+            raise ProfileError("fixture failed: " + ", ".join(f"{item.name} {item.detail}".strip() for item in failed))
+
+
+class ProfileValidator:
+    """Public formal-profile admission point used before pressure execution."""
+
+    @staticmethod
+    def validate(profile: "DeviceProfile", required_event_types: Iterable[str] = ()) -> None:
+        profile.assert_formal_ready(required_event_types)
 
 
 TOOL_LOG_FACT_KEYS = {
@@ -184,7 +318,108 @@ class DeviceProfile:
                 raise ProfileError(f"duplicate wake_word_id: {wake_word_id}")
             wake_word_ids.add(wake_word_id)
         cls._validate_marker_rules(payload)
+        cls._validate_event_rules(payload)
         return cls(profile_id, schema_version, path, payload, sha256_file(path), MarkerGate())
+
+    @staticmethod
+    def _validate_event_rules(payload: Mapping[str, Any]) -> None:
+        rules = payload.get("event_rules", [])
+        if rules is None:
+            rules = []
+        if not isinstance(rules, list):
+            raise ProfileError("event_rules must be a list")
+        formal = str(payload.get("contract_mode") or "").lower() == "formal"
+        if formal and not rules:
+            raise ProfileError("formal profile requires event_rules")
+        ids: set[str] = set()
+        for index, rule in enumerate(rules):
+            location = f"event_rules[{index}]"
+            if not isinstance(rule, Mapping):
+                raise ProfileError(f"{location} must be an object")
+            event_type = str(rule.get("event_type") or "").strip()
+            if event_type not in EVENT_REGISTRY:
+                raise ProfileError(f"{location} has unsupported event_type: {event_type}")
+            rule_id = str(rule.get("rule_id") or "").strip()
+            if not rule_id:
+                raise ProfileError(f"{location} requires rule_id")
+            if rule_id in ids:
+                raise ProfileError(f"duplicate event rule_id: {rule_id}")
+            ids.add(rule_id)
+            pattern = str(rule.get("regex") or rule.get("pattern") or "")
+            if not pattern:
+                raise ProfileError(f"{location} requires regex")
+            try:
+                compiled = re.compile(pattern, flags=re.IGNORECASE)
+            except re.error as error:
+                raise ProfileError(f"invalid event regex at {location}: {error}") from error
+            if not compiled.groupindex:
+                raise ProfileError(f"{location} regex requires named capture groups")
+            presentation_capture = str(rule.get("presentation_capture") or "").strip()
+            if presentation_capture not in compiled.groupindex:
+                raise ProfileError(f"{location} presentation_capture must name a regex capture")
+            source = rule.get("sources", {})
+            if source and not isinstance(source, Mapping):
+                raise ProfileError(f"{location}.sources must be an object")
+            if formal and not source:
+                raise ProfileError(f"{location} formal rule requires sources")
+            stage = str(rule.get("stage") or "").strip()
+            if formal and not stage:
+                raise ProfileError(f"{location} formal rule requires stage")
+            correlation = rule.get("correlation", {})
+            if correlation and not isinstance(correlation, Mapping):
+                raise ProfileError(f"{location}.correlation must be an object")
+            identity_capture = str(correlation.get("identity_capture") or "") if isinstance(correlation, Mapping) else ""
+            if identity_capture and identity_capture not in compiled.groupindex:
+                raise ProfileError(f"{location} correlation.identity_capture must name a regex capture")
+            policy = str(rule.get("mirror_policy") or "distinct").lower()
+            if policy not in MIRROR_POLICIES:
+                raise ProfileError(f"{location} has invalid mirror_policy: {policy}")
+            if formal and "required_for" not in rule:
+                raise ProfileError(f"{location} formal rule requires required_for")
+            if formal and "empty_placeholder" not in rule:
+                raise ProfileError(f"{location} formal rule requires empty_placeholder")
+            if event_type == "player_state":
+                state_class = str(rule.get("state_class") or "").lower()
+                if state_class not in PLAYER_STATE_CLASSES:
+                    raise ProfileError(f"{location} player_state requires a valid state_class")
+                policy_name = str(rule.get("render_policy") or "").lower()
+                if policy_name not in {"all", "first_per_state", "terminal_and_error"}:
+                    raise ProfileError(f"{location} has invalid player render_policy")
+            fixtures = rule.get("fixtures")
+            if formal and not isinstance(fixtures, Mapping):
+                raise ProfileError(f"{location} formal rule requires fixtures")
+            if isinstance(fixtures, Mapping):
+                positive = fixtures.get("positive", [])
+                negative = fixtures.get("negative", [])
+                if formal and (not positive or not negative):
+                    raise ProfileError(f"{location} formal rule requires positive and negative fixtures")
+                for sample in positive:
+                    text = str(sample.get("text", "")) if isinstance(sample, Mapping) else str(sample)
+                    if not compiled.search(text):
+                        raise ProfileError(f"{location} positive fixture does not match")
+                for sample in negative:
+                    text = str(sample.get("text", "")) if isinstance(sample, Mapping) else str(sample)
+                    if compiled.search(text):
+                        raise ProfileError(f"{location} negative fixture matches")
+        safety = payload.get("safety_stop", [])
+        if safety and not isinstance(safety, list):
+            raise ProfileError("safety_stop must be a list")
+        for index, item in enumerate(safety or []):
+            if not isinstance(item, Mapping):
+                raise ProfileError(f"safety_stop[{index}] must be an object")
+            trigger = str(item.get("event_rule_id") or "").strip()
+            reason = str(item.get("reason") or "").strip()
+            fixtures = item.get("fixtures")
+            if not trigger or trigger not in ids or not reason or not isinstance(fixtures, Mapping):
+                raise ProfileError(f"safety_stop[{index}] requires event_rule_id, reason, and fixtures")
+            if not fixtures.get("positive") or not fixtures.get("negative"):
+                raise ProfileError(f"safety_stop[{index}] requires positive and negative fixtures")
+            risk = str(item.get("risk_category") or "").lower()
+            if risk not in {"device", "data", "person"}:
+                raise ProfileError(f"safety_stop[{index}] requires risk_category device/data/person")
+            target = next(rule for rule in rules if str(rule.get("rule_id")) == trigger)
+            if not bool(target.get("safety_eligible", False)):
+                raise ProfileError(f"safety_stop[{index}] trigger rule must explicitly declare safety_eligible")
 
     @staticmethod
     def _validate_marker_rules(payload: Mapping[str, Any]) -> None:
@@ -273,6 +508,104 @@ class DeviceProfile:
     def observations(self) -> Mapping[str, Any]:
         value = self.payload.get("observations", {})
         return value if isinstance(value, Mapping) else {}
+
+    @property
+    def is_formal(self) -> bool:
+        return str(self.payload.get("contract_mode") or "").lower() == "formal"
+
+    @property
+    def event_rules(self) -> list[Mapping[str, Any]]:
+        return [dict(item) for item in self.payload.get("event_rules", []) if isinstance(item, Mapping)]
+
+    @property
+    def safety_stop(self) -> list[Mapping[str, Any]]:
+        return [dict(item) for item in self.payload.get("safety_stop", []) if isinstance(item, Mapping)]
+
+    def assert_formal_ready(self, required_event_types: Iterable[str] = ()) -> None:
+        """Reject a formal run before actions when its evidence contract is incomplete."""
+        if not self.is_formal:
+            raise ProfileError("formal pressure runs require contract_mode=formal")
+        available = {str(rule.get("event_type")) for rule in self.event_rules}
+        missing = {str(item) for item in required_event_types if str(item)} - available
+        if missing:
+            raise ProfileError(f"BLOCKED_PROFILE_CONTRACT missing event rules: {', '.join(sorted(missing))}")
+        ProfileFixtureRunner(self).assert_valid()
+
+    def case_contract(self, metadata: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Return a declared case contract without inferring any project field."""
+        timeline = metadata.get("timeline", {}) if isinstance(metadata, Mapping) else {}
+        if not isinstance(timeline, Mapping):
+            raise ProfileError("BLOCKED_PROFILE_CONTRACT case timeline must be an object")
+        required = timeline.get("required_facts", ())
+        if not isinstance(required, (list, tuple, set)):
+            raise ProfileError("BLOCKED_PROFILE_CONTRACT required_facts must be a list")
+        registry_keys = {entry["key"] for entry in EVENT_REGISTRY.values()}
+        unknown = {str(item).upper() for item in required} - registry_keys
+        if unknown:
+            raise ProfileError("BLOCKED_PROFILE_CONTRACT unknown required facts: " + ", ".join(sorted(unknown)))
+        return dict(timeline)
+
+    @staticmethod
+    def _source_matches(rule: Mapping[str, Any], record: RawLogRecord) -> bool:
+        sources = rule.get("sources", {})
+        if not isinstance(sources, Mapping):
+            return True
+        for name, actual in (("sources", record.source), ("ports", record.port), ("roles", record.role), ("phases", record.phase)):
+            allowed = sources.get(name, [])
+            if allowed in (None, "", []):
+                continue
+            if not isinstance(allowed, (list, tuple, set)):
+                allowed = [allowed]
+            if str(actual) not in {str(item) for item in allowed}:
+                return False
+        return True
+
+    def extract_facts(self, record: RawLogRecord) -> list[ProfileFact]:
+        """Apply only project-owned event rules and preserve every raw capture."""
+        facts: list[ProfileFact] = []
+        for rule in self.event_rules:
+            if not self._source_matches(rule, record):
+                continue
+            pattern = str(rule.get("regex") or rule.get("pattern") or "")
+            match = re.search(pattern, record.text, flags=re.IGNORECASE)
+            if match is None:
+                continue
+            captures = {name: str(value or "") for name, value in match.groupdict().items()}
+            presentation_capture = str(rule["presentation_capture"])
+            presentation_value = captures[presentation_capture]
+            event_type = str(rule["event_type"])
+            registry = EVENT_REGISTRY[event_type]
+            correlation = rule.get("correlation", {})
+            identity_capture = str(correlation.get("identity_capture") or "") if isinstance(correlation, Mapping) else ""
+            identity = captures.get(identity_capture, "") if identity_capture else ""
+            facts.append(ProfileFact(
+                event_type=event_type,
+                key=registry["key"],
+                tag=registry["tag"],
+                presentation_value=presentation_value,
+                captures=captures,
+                source=record.source,
+                port=record.port,
+                role=record.role,
+                phase=str(rule.get("stage") or record.phase),
+                identity=identity,
+                mirror_policy=str(rule.get("mirror_policy") or "distinct").lower(),
+                state_class=str(rule.get("state_class") or "").lower(),
+                render_policy=str(rule.get("render_policy") or "all").lower(),
+                evidence=tuple(record.evidence),
+                rule_id=str(rule.get("rule_id") or ""),
+                sequence=record.sequence,
+                epoch=record.epoch,
+                profile_version=self.schema_version,
+            ))
+        return facts
+
+    def safety_stop_reason(self, facts: Iterable[ProfileFact]) -> str:
+        by_rule = {item.rule_id for item in facts}
+        for item in self.safety_stop:
+            if str(item.get("event_rule_id") or "") in by_rule:
+                return str(item.get("reason") or "")
+        return ""
 
     @property
     def recovery(self) -> Mapping[str, Any]:
