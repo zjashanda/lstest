@@ -245,9 +245,34 @@ class TimelineLedger:
 
     def action(self, case_id: str, text: str, audio_file: Any, *, phase: str = "command") -> None:
         filename = safe_basename(audio_file)
-        body = f"播放: {self._text(text)}"
+        body = f"主机播放开始: {self._text(text)}"
         if filename:
             body = self._append(body, "文件", filename)
+        self._line("ACTION", body)
+
+    def action_end(
+        self,
+        case_id: str,
+        text: str,
+        audio_file: Any,
+        *,
+        status: str,
+        duration_ms: int | None = None,
+    ) -> None:
+        filename = safe_basename(audio_file)
+        body = f"主机播放结束: {self._text(text)}"
+        if filename:
+            body = self._append(body, "文件", filename)
+        body = self._append(body, "结果", self._text(status))
+        if duration_ms is not None:
+            body = self._append(body, "主机播放耗时", f"{duration_ms}ms")
+        self._line("ACTION", body)
+
+    def wait(self, case_id: str, action: str, *, planned_ms: int) -> None:
+        """Render a case-scoped device-window wait without inventing a fact."""
+        body = self._text(action)
+        if planned_ms > 0:
+            body = self._append(body, "等待", f"{planned_ms}ms")
         self._line("ACTION", body)
 
     def fact(
@@ -267,6 +292,8 @@ class TimelineLedger:
         duration_ms: int | None = None,
         e2e_duration_ms: int | None = None,
         render: bool = True,
+        display_key: str = "",
+        track: bool = True,
     ) -> FactOccurrence:
         normalized_key = str(key or "").upper()
         rendered_tag = tag or FACT_TAGS.get(normalized_key, "DEVICE")
@@ -290,7 +317,7 @@ class TimelineLedger:
             e2e_duration_ms=e2e_duration_ms,
         )
         timeline = self._cases.get(case_id)
-        if timeline and not timeline.closed:
+        if timeline and not timeline.closed and track:
             timeline.facts.append(occurrence)
         elif not timeline:
             # A profile may legitimately expose a fact before the host action.
@@ -305,7 +332,7 @@ class TimelineLedger:
             rendered_value = sanitize_url(occurrence.value)
         else:
             rendered_value = occurrence.value
-        body = f"{normalized_key}: {rendered_value}"
+        body = f"{self._text(display_key) or normalized_key}: {rendered_value}"
         if duration_ms is not None:
             body = self._append(body, "耗时", f"{duration_ms}ms")
         if e2e_duration_ms is not None:

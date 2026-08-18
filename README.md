@@ -4,10 +4,6 @@
 
 ## Skill layout
 
-- `.pytest_cache/.gitignore`
-- `.pytest_cache/CACHEDIR.TAG`
-- `.pytest_cache/v/cache/lastfailed`
-- `.pytest_cache/v/cache/nodeids`
 - `agents/openai.yaml`
 - `config/profile.example.json`
 - `config/requirements.txt`
@@ -58,7 +54,7 @@ Then restart Codex.
 ## 固定接入顺序
 
 1. 采集该项目真实正常、缺失、重复、异常、初始化、命令回执/旁证、重启、多端口和播放器日志。
-2. 在项目 profile 中为每个关键事实填写来源范围、正则、命名捕获、唯一展示捕获、阶段、关联、镜像、空值、fixture 和恢复规则。
+2. 在项目 profile 中为每个关键事实填写来源范围、正则、命名捕获、主展示捕获、可选多字段展示、阶段、关联、镜像、空值、fixture 和恢复规则。
 3. 先运行 profile fixture 与无硬件 `preflight`；未满足正式合同必须 `BLOCKED_PROFILE_CONTRACT`，不得猜测日志含义。
 4. 项目适配器持续提交 `RawLogRecord` 给 `ScenarioRuntime.submit_raw_record(...)`；不得自行解析后写 `tool.log`。
 5. 在真机授权后进行短回放/冒烟，再启动正式压测。
@@ -66,10 +62,11 @@ Then restart Codex.
 ## 框架边界
 
 - 框架只定义测试流程类别、时间戳、标签、结果产物、关联/计数和轮末判定；不内置项目 marker、正则、捕获字段、端口、命令、业务值或默认展示字段。
-- profile 的 `presentation_capture` 是唯一展示值。`tool.log` 只显示 `KEY: 原始捕获值`，不显示正则、规则 ID、捕获字段名、内部关联 ID 或绝对路径。
+- 未配置 `display_captures` 时，`presentation_capture` 保持既有的唯一展示行为。需要展示实际字段名时，profile 可按顺序声明 `display_captures`；例如 `keyword`、`intent`、`queryId`。`tool.log` 只显示声明的 `tag_name: 原始捕获值`，不显示正则、规则 ID、内部关联 ID 或绝对路径。
 - 播放器原始 marker 必须原样显示。`state_class` 仅供去重、窗口和耗时计算，绝不能改写显示文本。
 - 每个活动 case 中到达的事实都立即按顺序显示，包括播报前与异常后；每轮只有一次 `[RESULT]`。必需而缺失的事实在轮末以空值行补齐。
 - 结果目录仅保留 `serial_logs/*.log`、`tool.log`、`results.csv`、`cases.csv`。禁止 `.bin`、`task.log`、`tool_logs`、JSONL 和临时结果文件。
+- 固定语料在首个设备动作前调用 `freeze_cases()`；随机长压先调用 `begin_lazy_cases()` 冻结场景、种子和 profile 身份，再于每轮动作前调用 `declare_case()`。未声明的 case 不得播放或发送设备命令。
 
 ## 异常与停止
 

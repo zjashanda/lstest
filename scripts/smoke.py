@@ -19,6 +19,38 @@ except ImportError:  # direct execution fallback
     from shell import ProfileRecoveryStateMachine
 
 
+def collect_initialization_evidence(
+    capture: SerialManager,
+    profile: DeviceProfile,
+    *,
+    timeout_s: float,
+    cursors: dict[str, int],
+) -> list[Any]:
+    """Return only profile-validated initialization records from one wait window."""
+    matched: list[Any] = []
+    inspected: set[tuple[str, int]] = set()
+
+    def has_initialization(events: list[Any]) -> bool:
+        for item in events:
+            identity = (str(getattr(item, "port", "")), int(getattr(item, "cursor", 0)))
+            if identity in inspected:
+                continue
+            inspected.add(identity)
+            if profile.match_any(
+                profile.initialization_patterns,
+                str(getattr(item, "line", "")),
+                port=getattr(item, "port", None),
+                role=getattr(item, "role", None),
+                phase="smoke_initialization",
+                monotonic_seconds=getattr(item, "monotonic_seconds", None),
+            ):
+                matched.append(item)
+        return bool(matched)
+
+    capture.wait_for(has_initialization, timeout_s, cursors=cursors)
+    return matched
+
+
 def run_smoke(connection: ConnectionSpec, profile_path: Path, *, hardware: bool = False) -> dict[str, Any]:
     artifacts = TaskArtifacts(connection.result_root, "lstest_basic_smoke", ["case_id", "raw_status", "reviewed_status", "reason", "facts", "evidence"])
     artifacts.configure({"connection": connection.to_dict(), "profile_path": str(profile_path), "hardware": hardware})
@@ -61,23 +93,20 @@ def run_smoke(connection: ConnectionSpec, profile_path: Path, *, hardware: bool 
             else:
                 artifacts.set_capability("serial", "PASS", "declared ports opened", ports=list(connection.to_dict()["ports"]))
             init_cursor = capture.snapshot()
-            init_events = capture.wait_for(
-                lambda events: any(profile.match_any(
-                    profile.initialization_patterns,
-                    item.line,
-                    port=item.port,
-                    role=item.role,
-                    phase="smoke_initialization",
-                    monotonic_seconds=item.monotonic_seconds,
-                ) for item in events),
-                3.0,
+            init_events = collect_initialization_evidence(
+                capture,
+                profile,
+                timeout_s=3.0,
                 cursors=init_cursor,
             ) if not capture.open_failures else []
             init_ok = bool(init_events)
             artifacts.set_capability("initialization", "PASS" if init_ok else "WARN", "profile initialization marker observed" if init_ok else "no new initialization marker in smoke window", marker_count=len(init_events))
             artifacts.set_capability("player", "PASS", "explicit player probe passed")
             if status != "BLOCKED":
-                recovery = runtime.recover_initialization(capture)
+                recovery = runtime.recover_initialization(
+                    capture,
+                    initialization_events=init_events if init_ok else None,
+                )
                 command_results = recovery.get("commands", [])
                 if command_results:
                     command_statuses = {str(item.get("status")) for item in command_results}

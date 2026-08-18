@@ -144,6 +144,7 @@ class ProfileCommandSender:
         role: str | None = None,
         port: str | None = None,
         restart_guard: Callable[[], Any | None] | None = None,
+        action_label: str = "profile 许可命令",
     ) -> dict[str, Any]:
         """Send and verify an approved command without treating silence as success."""
         try:
@@ -196,11 +197,12 @@ class ProfileCommandSender:
             cursors = self._snapshot(resolved_port)
             self.artifacts.emit(
                 "SERIAL_COMMAND_ATTEMPT",
-                message=f"发送初始化命令，第 {attempt}/{max_attempts} 次: {command}。",
+                message=f"发送{action_label}，第 {attempt}/{max_attempts} 次: {command}。",
                 task_log=True,
                 command=command,
                 role=role,
                 port=resolved_port,
+                action_label=action_label,
                 attempt=attempt,
                 max_attempts=max_attempts,
                 cursors=cursors,
@@ -225,33 +227,63 @@ class ProfileCommandSender:
                 else:
                     failure_reason = "direct_ack_not_matched"
             else:
-                ack_events = self._matching_events(
-                    success_patterns,
-                    port=resolved_port,
-                    cursors=cursors,
-                    timeout_s=ack_timeout_s,
-                    phase="command_serial_ack",
-                )
-                if ack_events:
-                    validation_source = "serial_ack"
-                    evidence_events = ack_events
-                elif evidence_patterns:
-                    evidence_events = self._matching_events(
+                def classify(events: Iterable[Any]) -> tuple[str, list[Any]]:
+                    for event in events:
+                        if success_patterns and self._event_matches(success_patterns, event, phase="command_serial_ack"):
+                            return "serial_ack", [event]
+                        if evidence_patterns and self._event_matches(evidence_patterns, event, phase="command_evidence"):
+                            return "serial_evidence", [event]
+                    return "", []
+
+                # A reboot can expose only the later initialization marker.
+                # Wait for an acknowledgement and an approved evidence marker
+                # together so a missing optional acknowledgement does not add
+                # its full timeout before recovery can begin.
+                if success_patterns and evidence_patterns:
+                    shared_timeout_s = min(ack_timeout_s, evidence_timeout_s)
+                    shared_events = self._matching_events(
+                        [*success_patterns, *evidence_patterns],
+                        port=resolved_port,
+                        cursors=cursors,
+                        timeout_s=shared_timeout_s,
+                        phase="command_ack_or_evidence",
+                    )
+                    validation_source, evidence_events = classify(shared_events)
+                    if not validation_source:
+                        longer_patterns = success_patterns if ack_timeout_s > evidence_timeout_s else evidence_patterns
+                        longer_phase = "command_serial_ack" if ack_timeout_s > evidence_timeout_s else "command_evidence"
+                        longer_timeout_s = abs(ack_timeout_s - evidence_timeout_s)
+                        if longer_timeout_s > 0:
+                            longer_events = self._matching_events(
+                                longer_patterns,
+                                port=resolved_port,
+                                cursors=cursors,
+                                timeout_s=longer_timeout_s,
+                                phase=longer_phase,
+                            )
+                            validation_source, evidence_events = classify(longer_events)
+                elif success_patterns:
+                    validation_source, evidence_events = classify(self._matching_events(
+                        success_patterns,
+                        port=resolved_port,
+                        cursors=cursors,
+                        timeout_s=ack_timeout_s,
+                        phase="command_serial_ack",
+                    ))
+                else:
+                    validation_source, evidence_events = classify(self._matching_events(
                         evidence_patterns,
                         port=resolved_port,
                         cursors=cursors,
                         timeout_s=evidence_timeout_s,
                         phase="command_evidence",
-                    )
-                    if evidence_events:
-                        validation_source = "serial_evidence"
-                    else:
-                        failure_reason = "no_ack_or_evidence"
-                else:
-                    failure_reason = "no_ack"
+                    ))
+                if not validation_source:
+                    failure_reason = "no_ack_or_evidence" if evidence_patterns else "no_ack"
 
             result = {
                 "command": command,
+                "action_label": action_label,
                 "role": role,
                 "port": resolved_port,
                 "attempt": attempt,
@@ -269,7 +301,7 @@ class ProfileCommandSender:
                 attempts.append(result)
                 self.artifacts.emit(
                     "SERIAL_COMMAND_VALIDATED",
-                    message=f"初始化命令已验证成功: {command}；来源={validation_source}。",
+                    message=f"{action_label}已验证成功: {command}；来源={validation_source}。",
                     task_log=True,
                     **result,
                 )
@@ -281,7 +313,7 @@ class ProfileCommandSender:
             self.artifacts.emit(
                 "SERIAL_COMMAND_ATTEMPT_FAILED",
                 level=level,
-                message=f"初始化命令第 {attempt}/{max_attempts} 次未验证成功: {command}；{failure_reason}。",
+                message=f"{action_label}第 {attempt}/{max_attempts} 次未验证成功: {command}；{failure_reason}。",
                 task_log=True,
                 **result,
             )
@@ -300,7 +332,7 @@ class ProfileCommandSender:
                 self.artifacts.emit(
                     "SERIAL_COMMAND_RETRY",
                     level="WARN",
-                    message=f"初始化命令将在 {retry_delay_s:.2f}s 后重试: {command}。",
+                    message=f"{action_label}将在 {retry_delay_s:.2f}s 后重试: {command}。",
                     task_log=True,
                     command=command,
                     role=role,
@@ -314,7 +346,7 @@ class ProfileCommandSender:
         self.artifacts.emit(
             "SERIAL_COMMAND_RECOVERY_FAILED",
             level="ERROR",
-            message=f"初始化命令重试耗尽仍未恢复: {command}。",
+            message=f"{action_label}重试耗尽仍未恢复: {command}。",
             task_log=True,
             **final,
         )
@@ -397,10 +429,12 @@ class ProfileRecoveryStateMachine:
         timeout_s: float = 5.0,
         *,
         cursors: Mapping[str, int] | None = None,
+        initialization_events: Iterable[Any] | None = None,
         recovery_reason: str = "startup",
         epoch: int | None = None,
         restart_guard: Callable[[], Any | None] | None = None,
         stable_for_s: float | None = None,
+        case_id: str = "",
     ) -> dict[str, Any]:
         enabled = [
             dict(item) for item in self.profile.payload.get("commands", [])
@@ -441,35 +475,57 @@ class ProfileRecoveryStateMachine:
             return self._complete(self._cancelled_result(
                 recovery_reason=recovery_reason, epoch=epoch, state=self.state, restart_event=restart_event,
             ))
-        self.state = "WAIT_INIT"
-        self.artifacts.emit(
-            "PROFILE_RECOVERY_WAIT_INIT",
-            message="等待设备完成初始化后再发送恢复命令。",
-            task_log=True,
-            recovery_reason=recovery_reason,
-            initialization_patterns=self.profile.initialization_patterns,
-            timeout_s=timeout_s,
-            cursors=start_cursors,
-            epoch=epoch if epoch is not None else self.artifacts.current_epoch,
-        )
-        events = self.manager.wait_for(
-            lambda items: (
-                bool(restart_guard and restart_guard())
-                or any(self._event_matches(self.profile.initialization_patterns, item, phase="initialization") for item in items)
-            ),
-            timeout_s,
-            cursors=start_cursors,
-        )
+        observed_events = list(initialization_events or ())
+        if observed_events:
+            # A caller may have just completed a bounded initialization wait.
+            # Reuse only evidence that still matches this same profile, rather
+            # than requiring a second boot marker that an already-ready device
+            # will never emit.
+            self.state = "INIT_OBSERVED"
+            events = observed_events
+            init_events = [
+                item for item in events
+                if self._event_matches(self.profile.initialization_patterns, item, phase="initialization")
+            ]
+            self.artifacts.emit(
+                "PROFILE_RECOVERY_USE_OBSERVED_INIT",
+                message="复用已观测到的初始化标记，稳定后发送恢复命令。",
+                task_log=True,
+                recovery_reason=recovery_reason,
+                marker_count=len(init_events),
+                evidence=self._evidence_refs(init_events),
+                epoch=epoch if epoch is not None else self.artifacts.current_epoch,
+            )
+        else:
+            self.state = "WAIT_INIT"
+            self.artifacts.emit(
+                "PROFILE_RECOVERY_WAIT_INIT",
+                message="等待设备完成初始化后再发送恢复命令。",
+                task_log=True,
+                recovery_reason=recovery_reason,
+                initialization_patterns=self.profile.initialization_patterns,
+                timeout_s=timeout_s,
+                cursors=start_cursors,
+                epoch=epoch if epoch is not None else self.artifacts.current_epoch,
+            )
+            events = self.manager.wait_for(
+                lambda items: (
+                    bool(restart_guard and restart_guard())
+                    or any(self._event_matches(self.profile.initialization_patterns, item, phase="initialization") for item in items)
+                ),
+                timeout_s,
+                cursors=start_cursors,
+            )
+            init_events = [
+                item for item in events
+                if self._event_matches(self.profile.initialization_patterns, item, phase="initialization")
+            ]
         restart_event = restart_guard() if restart_guard else None
         if restart_event:
             self.state = "CANCELLED"
             return self._complete(self._cancelled_result(
                 recovery_reason=recovery_reason, epoch=epoch, state=self.state, restart_event=restart_event,
             ))
-        init_events = [
-            item for item in events
-            if self._event_matches(self.profile.initialization_patterns, item, phase="initialization")
-        ]
         if not init_events:
             self.state = "BLOCKED"
             return self._complete({
@@ -491,6 +547,7 @@ class ProfileRecoveryStateMachine:
             port=getattr(first_init, "port", ""),
             role=getattr(first_init, "role", ""),
             epoch=epoch if epoch is not None else self.artifacts.current_epoch,
+            case_id=case_id,
         )
         self.artifacts.emit_judgement(
             "初始化", "PASS", tag="RESULT",
@@ -519,7 +576,13 @@ class ProfileRecoveryStateMachine:
                 return self._complete(self._cancelled_result(
                     recovery_reason=recovery_reason, epoch=epoch, state=self.state, restart_event=restart_event,
                 ))
-            self.artifacts.emit_fact("INIT_STABLE", "ready", tag="DEVICE", evidence=ProfileCommandSender._evidence_refs(init_events))
+            self.artifacts.emit_fact(
+                "INIT_STABLE",
+                "ready",
+                tag="DEVICE",
+                evidence=ProfileCommandSender._evidence_refs(init_events),
+                case_id=case_id,
+            )
 
         self.state = "SEND_APPROVED"
         sender = ProfileCommandSender(self.profile, self.artifacts, self.manager.write, self.manager)
@@ -536,7 +599,13 @@ class ProfileRecoveryStateMachine:
             roles = rule.get("roles") or [None]
             role = str(roles[0]) if roles and roles[0] else None
             target = next((spec.port for spec in self.manager.ports if role is None or spec.role == role), None)
-            command_result = sender.send(command, role=role, port=target, restart_guard=restart_guard)
+            command_result = sender.send(
+                command,
+                role=role,
+                port=target,
+                restart_guard=restart_guard,
+                action_label="初始化恢复命令",
+            )
             results.append(command_result)
             if command_result.get("status") == "CANCELLED":
                 self.state = "CANCELLED"
@@ -553,6 +622,7 @@ class ProfileRecoveryStateMachine:
             "state": self.state,
             "recovery_reason": recovery_reason,
             "marker_count": len(events),
+            "initialization_source": "observed" if observed_events else "waited",
             "initialization_evidence_refs": self._evidence_refs(init_events),
             "commands": results,
         })

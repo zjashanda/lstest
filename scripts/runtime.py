@@ -180,6 +180,7 @@ class ScenarioRuntime:
         self._case_facts: dict[str, dict[str, Any]] = {}
         self._attempts: dict[str, dict[str, int]] = {}
         self._online_requests: dict[tuple[int, str], dict[str, Any]] = {}
+        self._profile_player_started: dict[tuple[int, str, str], float] = {}
         self.case_windows: dict[str, CaseWindow] = {}
         self.wake_word_sequence = WakeWordSequence.from_items(wake_words)
         self.health_recovery = health_recovery
@@ -211,6 +212,31 @@ class ScenarioRuntime:
             profile_version=profile_version,
             profile_sha256=profile_sha256,
         )
+
+    def begin_lazy_cases(
+        self,
+        *,
+        scenario: str,
+        planned_total: int | None = None,
+        random_seed: Any = "",
+        profile_version: Any = "",
+        profile_sha256: Any = "",
+    ) -> None:
+        if self.profile is not None and self.profile.is_formal:
+            self.profile.assert_formal_ready()
+        self.artifacts.begin_lazy_cases(
+            scenario=scenario,
+            planned_total=planned_total,
+            random_seed=random_seed,
+            profile_version=profile_version,
+            profile_sha256=profile_sha256,
+        )
+
+    def declare_case(self, case: Any) -> int:
+        metadata = getattr(case, "metadata", {}) if not isinstance(case, Mapping) else case.get("metadata", case)
+        if self.profile is not None and self.profile.is_formal:
+            self.profile.case_contract(metadata if isinstance(metadata, Mapping) else {})
+        return self.artifacts.declare_case(case)
 
     def current_wake_word(self) -> dict[str, Any]:
         """Return the only wake word currently allowed by the ordered requirements table."""
@@ -259,6 +285,14 @@ class ScenarioRuntime:
         facts = self.profile.extract_facts(raw)
         for fact in facts:
             if fact.event_type == "player_state":
+                player_key = (raw.epoch, case_id, fact.identity or case_id)
+                duration_ms = None
+                if fact.state_class == "active":
+                    self._profile_player_started[player_key] = time.monotonic()
+                elif fact.state_class in {"terminal", "error"}:
+                    started = self._profile_player_started.pop(player_key, None)
+                    if started is not None:
+                        duration_ms = round((time.monotonic() - started) * 1000)
                 self.artifacts.timeline_player(
                     case_id,
                     fact.presentation_value,
@@ -270,20 +304,24 @@ class ScenarioRuntime:
                     evidence=fact.evidence,
                     state_class=fact.state_class,
                     render_policy=fact.render_policy,
+                    duration_ms=duration_ms,
                 )
             else:
-                self.artifacts.timeline_fact(
-                    case_id,
-                    fact.key,
-                    fact.presentation_value,
-                    tag=fact.tag,
-                    port=fact.port,
-                    role=fact.role,
-                    phase=fact.phase,
-                    identity=fact.identity,
-                    mirror_policy=fact.mirror_policy,
-                    evidence=fact.evidence,
-                )
+                for index, (tag_name, value) in enumerate(fact.display_fields):
+                    self.artifacts.timeline_fact(
+                        case_id,
+                        fact.key,
+                        value,
+                        tag=fact.tag,
+                        port=fact.port,
+                        role=fact.role,
+                        phase=fact.phase,
+                        identity=fact.identity,
+                        mirror_policy=fact.mirror_policy,
+                        evidence=fact.evidence,
+                        display_key=tag_name,
+                        track=index == 0,
+                    )
             self._update_case_facts(
                 case_id,
                 profile_facts=[
@@ -567,6 +605,8 @@ class ScenarioRuntime:
     ) -> dict[str, Any]:
         """播放音频，并建立与期望原始识别字段一一对应的播报窗口。"""
         self.artifacts.require_cases_frozen("audio_playback")
+        if case_id:
+            self.artifacts.require_case_declared(case_id, "audio_playback")
         window = self.open_case_window(case_id) if case_id else None
         self._next_broadcast_index += 1
         broadcast_id = f"broadcast-{self._next_broadcast_index:06d}"

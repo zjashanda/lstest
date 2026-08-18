@@ -13,6 +13,9 @@
     "sources": {"sources": ["<source>"], "ports": ["<port>"], "roles": ["<role>"]},
     "regex": "<project-regex-with-named-captures>",
     "presentation_capture": "<one-named-capture>",
+    "display_captures": [
+      {"tag_name": "<native-field-name>", "capture": "<named-capture>"}
+    ],
     "stage": "<case-stage>",
     "correlation": {"identity_capture": "<optional-named-capture>"},
     "mirror_policy": "distinct|mirror|reject_ambiguous",
@@ -23,8 +26,8 @@
 }
 ```
 
-允许的 `event_type` 由 `scripts/profile.py` 的 `EVENT_REGISTRY` 登记，只代表测试流程类别。项目不得自行制造 tool.log key。播放器类别额外声明 `state_class`（`preparation`、`active`、`terminal`、`error`、`unknown`）和 `render_policy`；它们不改变 `presentation_capture` 的原始值。
+允许的 `event_type` 由 `scripts/profile.py` 的 `EVENT_REGISTRY` 登记，只代表测试流程类别。项目不得自行制造 tool.log 节点。`presentation_capture` 始终必填，用于保持旧 profile 的单字段展示兼容。`display_captures` 可选、按数组顺序渲染；每项必须有唯一的 `tag_name` 和存在于同一 regex 的 `capture`。它只展示设备原始值，不转换、不推断、不替换。播放器类别额外声明 `state_class`（`preparation`、`active`、`terminal`、`error`、`unknown`）和 `render_policy`；它们不改变原始 marker。
 
 安全停止放在 `safety_stop`，必须引用 `safety_eligible: true` 的规则，带 `reason`、`risk_category: device|data|person` 和正反 fixture。识别失败、超时、重试耗尽、重复结果和普通业务错误不能声明为安全停止。
 
-正式准入会验证命名捕获、唯一展示捕获、来源、阶段、关联、镜像、空值、正反 fixture 和安全停止 fixture；任一缺失即 `BLOCKED_PROFILE_CONTRACT`。
+正式准入会验证命名捕获、主展示捕获、多字段展示捕获、来源、阶段、关联、镜像、空值、正反 fixture 和安全停止 fixture；任一缺失即 `BLOCKED_PROFILE_CONTRACT`。正例可用 `display` 对象校验多字段值，例如 `"display": {"keyword": "xiao ti", "intent": "open ac"}`。

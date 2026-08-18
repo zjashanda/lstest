@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import sys
 import shutil
 import threading
 import time
@@ -321,7 +322,14 @@ class TaskArtifacts:
         "profile_version", "profile_sha256",
     )
 
-    def __init__(self, result_root: Path, task_slug: str, detail_fields: Sequence[str] = ()):
+    def __init__(
+        self,
+        result_root: Path,
+        task_slug: str,
+        detail_fields: Sequence[str] = (),
+        *,
+        terminal_stream: Any | None = None,
+    ):
         stamp = now_dt().strftime("%Y%m%d_%H%M%S")
         base = Path(result_root) / f"{stamp}_{task_slug}"
         candidate = base
@@ -339,6 +347,9 @@ class TaskArtifacts:
         self.stop_policy = StopPolicy(self.stop)
         self._lock = threading.RLock()
         self._tool = self.tool_log_path.open("a", encoding="utf-8")
+        self._terminal_stream: Any | None = terminal_stream
+        self._terminal_mirror_failure_recorded = False
+        self._legacy_stdout_disabled = False
         self.timeline = TimelineLedger(self._append_timeline_line, now_human)
         result_fields = list(dict.fromkeys([*self.RESULT_FIELDS, *detail_fields]))
         self._csv = self.results_path.open("w", encoding="utf-8-sig", newline="")
@@ -351,6 +362,10 @@ class TaskArtifacts:
         self._cases.flush()
         self._cases_frozen = False
         self._frozen_case_count = 0
+        self._planned_case_count = 0
+        self._lazy_case_mode = False
+        self._lazy_case_identity: dict[str, Any] = {}
+        self._declared_case_count = 0
         self._case_positions: dict[str, int] = {}
         self._case_metadata: dict[str, dict[str, Any]] = {}
         self.counts: dict[str, int] = {}
@@ -374,19 +389,43 @@ class TaskArtifacts:
 
     def _append_timeline_line(self, line: str) -> None:
         """Write renderer-owned lines atomically and flush them for live review."""
-        try:
-            with self._lock:
+        with self._lock:
+            try:
                 self._tool.write(line)
                 self._tool.flush()
-        except OSError as error:
-            # Do not attempt to write an ERROR line to a failed evidence file.
-            # The stop record remains available in memory/final console output.
-            self.stop_policy.request(
-                "EVIDENCE_WRITE_FAILURE",
-                reason="tool.log 无法可靠写入",
-                error=f"{type(error).__name__}: {error}",
-            )
-            raise
+            except OSError as error:
+                # The result log is the auditable evidence source.  A failure
+                # here means the task cannot safely continue.
+                self.stop_policy.request(
+                    "EVIDENCE_WRITE_FAILURE",
+                    reason="tool.log 无法可靠写入",
+                    error=f"{type(error).__name__}: {error}",
+                )
+                raise
+            if self._terminal_stream is not None:
+                try:
+                    self._terminal_stream.write(line)
+                    self._terminal_stream.flush()
+                except (OSError, ValueError):
+                    # A caller can close or lose its terminal pipe while the
+                    # task is still collecting device evidence.  The durable
+                    # tool.log remains healthy, so keep the case runnable and
+                    # record this once without recursively using Timeline.
+                    self._terminal_stream = None
+                    if not self._terminal_mirror_failure_recorded:
+                        self._terminal_mirror_failure_recorded = True
+                        self._tool.write(
+                            f"{now_human()} [SYSTEM] 终端镜像不可用，后续过程仅写入 tool.log。\n"
+                        )
+                        self._tool.flush()
+
+    def enable_terminal_mirror(self, stream: Any | None = None) -> None:
+        """Mirror exact human-timeline bytes to one terminal stream.
+
+        Only the timeline writer invokes this mirror, so project adapters cannot
+        create terminal-only human entries that differ from the tool log.
+        """
+        self._terminal_stream = stream or sys.stdout
 
     def _timeline_contract(self, case_id: str) -> dict[str, Any]:
         metadata = self._case_metadata.get(str(case_id), {})
@@ -408,7 +447,7 @@ class TaskArtifacts:
             case_id,
             epoch=self.current_epoch if epoch is None else int(epoch),
             position=self._case_positions.get(case_id, self.completed_cases + 1),
-            total=self._frozen_case_count,
+            total=self._planned_case_count or self._frozen_case_count,
             scenario=str(metadata.get("scenario", "")),
             text=str(metadata.get("input_text", "")),
             **contract,
@@ -416,6 +455,26 @@ class TaskArtifacts:
 
     def timeline_action(self, case_id: str, *, text: str, audio_file: Any, phase: str = "command") -> None:
         self.timeline.action(case_id, text, audio_file, phase=phase)
+
+    def timeline_action_end(
+        self,
+        case_id: str,
+        *,
+        text: str,
+        audio_file: Any,
+        status: str,
+        duration_ms: int | None = None,
+    ) -> None:
+        self.timeline.action_end(
+            case_id,
+            text,
+            audio_file,
+            status=status,
+            duration_ms=duration_ms,
+        )
+
+    def timeline_wait(self, case_id: str, *, action: str, planned_ms: int) -> None:
+        self.timeline.wait(case_id, action, planned_ms=planned_ms)
 
     def timeline_fact(self, case_id: str, key: str, value: Any, **fields: Any) -> Any:
         return self.timeline.fact(case_id, key, value, epoch=int(fields.pop("epoch", self.current_epoch)), **fields)
@@ -487,7 +546,7 @@ class TaskArtifacts:
         event_name = str(event or "EVENT").upper()
         case_id = str(known.get("case_id") or "")
         position = self._case_positions.get(case_id)
-        case_prefix = f"{position}/{self._frozen_case_count}" if position else "-/-"
+        case_prefix = f"{position}/{self._planned_case_count or self._frozen_case_count}" if position else "-/-"
         metadata = self._case_metadata.get(case_id, {})
         raw = known.get("raw")
         raw_text = ""
@@ -733,6 +792,8 @@ class TaskArtifacts:
             return fact("DEVICE", "RESTART", restart_value, ("epoch", known.get("epoch", "")), ("证据", value("evidence"))) + judgement("RESULT", "重启恢复", "RETRY", ("epoch", known.get("epoch", "")))
         if event_name == "PROFILE_RECOVERY_WAIT_INIT":
             return fact("DEVICE", "INIT_WAIT", "waiting", ("超时", value("timeout_s", default="")))
+        if event_name == "PROFILE_RECOVERY_USE_OBSERVED_INIT":
+            return fact("SYSTEM", "初始化证据", "已观察到", ("证据", value("evidence")))
         if event_name == "PROFILE_RECOVERY_STABILIZING":
             return fact("DEVICE", "INIT_STABLE", "waiting", ("耗时", value("elapsed_ms", default="")))
         if event_name.startswith("SERIAL_COMMAND") or event_name.startswith("PROFILE_RECOVERY"):
@@ -741,19 +802,23 @@ class TaskArtifacts:
             if event_name == "PROFILE_RECOVERY_RESULT":
                 return judgement("RESULT", "初始化", known.get("status", ""), ("原因", known.get("reason", "")))
             command = value("command", default="initialization")
+            action_label = value("action_label", default="")
             reply = value("reply", "direct_reply", default="")
             attempt = f"{value('attempt')}/{value('max_attempts')}" if value("attempt") else ""
             command_text = str(command)
             if "log" in command_text.lower() and any(char.isdigit() for char in command_text):
                 key = "LOG_LEVEL"
                 command_value = command_text.rsplit(None, 1)[-1]
+            elif action_label:
+                key = str(action_label)
+                command_value = command_text
             else:
                 key = "COMMAND"
                 command_value = command_text
             lines = [fact("COMMAND", key, command_value, ("尝试", attempt), ("回执", reply), ("证据", value("evidence")))]
             status = judgement_status(known.get("status", ""))
             if status or error_code:
-                name = "日志等级" if key == "LOG_LEVEL" else "初始化"
+                name = "日志等级" if key == "LOG_LEVEL" else (str(action_label) or "初始化")
                 lines.append(judgement("RESULT", name, status or ("FAIL" if error_code else "-"), ("异常", error_code), ("原因", known.get("reason", ""))))
             return "".join(lines)
         if event_name in {"TASK_FINISHED"}:
@@ -816,8 +881,18 @@ class TaskArtifacts:
         block = self._tool_block(event, level, message or event, fields)
         if block:
             self._append_timeline_line(block)
-        if task_log:
-            print(f"{now_human()} [{level.upper()}] {message or event}", flush=True)
+        # When a formal runtime has enabled the timeline mirror, the exact
+        # rendered line has already reached stdout.  Printing this legacy
+        # compatibility summary as well would make terminal output diverge
+        # from tool.log.
+        if task_log and self._terminal_stream is None and not self._legacy_stdout_disabled:
+            try:
+                print(f"{now_human()} [{level.upper()}] {message or event}", flush=True)
+            except (OSError, ValueError):
+                # A parent/CI pipe may close while the durable tool.log is
+                # still writable.  Do not turn that transport loss into a
+                # test or device failure during finalization.
+                self._legacy_stdout_disabled = True
 
     def write_tool_log(self, name: str, content: str, *, append: bool = True) -> Path:
         raise RuntimeError("项目适配器不得直接写 tool.log；请提交 RawLogRecord 或调用公开动作 API")
@@ -900,6 +975,109 @@ class TaskArtifacts:
             self.emit("CASES_NOT_FROZEN", level="ERROR", message=message, phase="preflight", action_id=action)
             raise RuntimeError(message)
 
+    def require_case_declared(self, case_id: str, action: str) -> None:
+        """Ensure a lazy case is durable before its first device action."""
+        if str(case_id) in self._case_positions:
+            return
+        message = f"执行 {action} 前必须先声明当前用例并写入 cases.csv。"
+        self.emit("CASE_NOT_DECLARED", level="ERROR", message=message, phase="preflight", action_id=action, case_id=case_id)
+        raise RuntimeError(message)
+
+    def begin_lazy_cases(
+        self,
+        *,
+        scenario: str,
+        planned_total: int | None = None,
+        random_seed: Any = "",
+        profile_version: Any = "",
+        profile_sha256: Any = "",
+    ) -> None:
+        """Freeze task identity without materialising a random pressure corpus."""
+        if self._cases_frozen or self._lazy_case_mode:
+            raise RuntimeError("cases.csv is already initialized for this task")
+        self._lazy_case_mode = True
+        self._cases_frozen = True
+        self._planned_case_count = max(0, int(planned_total or 0))
+        self._lazy_case_identity = {
+            "scenario": str(scenario),
+            "random_seed": random_seed,
+            "profile_version": profile_version,
+            "profile_sha256": profile_sha256,
+        }
+        self.emit(
+            "LAZY_CASE_LEDGER_READY",
+            message="已冻结惰性用例任务身份，后续用例将在动作前逐条写入 cases.csv。",
+            phase="preflight",
+            status="PASS",
+            raw={**self._lazy_case_identity, "planned_total": self._planned_case_count},
+        )
+
+    def declare_case(self, case: CaseSpec | Mapping[str, Any]) -> int:
+        """Persist one immutable lazy case before any playback or serial write."""
+        if not self._lazy_case_mode:
+            raise RuntimeError("declare_case is only available after begin_lazy_cases")
+        if isinstance(case, CaseSpec):
+            metadata = dict(case.metadata)
+            row = {
+                "case_id": case.case_id,
+                "scenario": metadata.get("scenario") or case.domain or self._lazy_case_identity["scenario"],
+                "input_text": case.text,
+                "audio_file": case.audio_path or "",
+                "case_contract": metadata.get("timeline", {}),
+                "timeline": metadata.get("timeline", {}),
+                "source_file": metadata.get("source_file", ""),
+                "source_sha256": metadata.get("source_sha256", ""),
+            }
+        else:
+            raw = dict(case)
+            row = {
+                "case_id": raw.get("case_id", ""),
+                "scenario": raw.get("scenario", raw.get("domain", self._lazy_case_identity["scenario"])),
+                "input_text": raw.get("input_text", raw.get("text", "")),
+                "audio_file": raw.get("audio_file", raw.get("audio_path", "")),
+                "case_contract": raw.get("timeline", raw.get("case_contract", {})),
+                "timeline": raw.get("timeline", {}),
+                "source_file": raw.get("source_file", ""),
+                "source_sha256": raw.get("source_sha256", ""),
+            }
+        case_id = str(row["case_id"] or "").strip()
+        if not case_id:
+            raise ValueError("lazy case requires case_id")
+        with self._lock:
+            if case_id in self._case_positions:
+                raise RuntimeError(f"lazy case is immutable and already declared: {case_id}")
+            order = self._declared_case_count + 1
+            audio_path = Path(str(row["audio_file"])) if row["audio_file"] else None
+            self._cases_writer.writerow({
+                "case_order": order,
+                **row,
+                "audio_sha256": sha256_file(audio_path) if audio_path and audio_path.is_file() else "",
+                "random_seed": self._lazy_case_identity["random_seed"],
+                "profile_version": self._lazy_case_identity["profile_version"],
+                "profile_sha256": self._lazy_case_identity["profile_sha256"],
+            } | {name: self._csv_value(value) for name, value in row.items()})
+            self._cases.flush()
+            self._case_positions[case_id] = order
+            self._case_metadata[case_id] = {
+                "scenario": row.get("scenario", ""),
+                "input_text": row.get("input_text", ""),
+                "audio_path": row.get("audio_file", ""),
+                "timeline": row.get("timeline", {}),
+                "profile_version": self._lazy_case_identity["profile_version"],
+                "profile_sha256": self._lazy_case_identity["profile_sha256"],
+            }
+            self._declared_case_count = order
+        self.emit(
+            "LAZY_CASE_DECLARED",
+            message=f"已声明第 {order} 条惰性用例。",
+            phase="case_declaration",
+            case_id=case_id,
+            round=order,
+            status="PASS",
+            raw={"case_order": order, **row},
+        )
+        return order
+
     def freeze_cases(
         self,
         cases: Iterable[CaseSpec | Mapping[str, Any]],
@@ -961,6 +1139,7 @@ class TaskArtifacts:
             self._cases.flush()
         self._cases_frozen = True
         self._frozen_case_count = len(rows)
+        self._planned_case_count = len(rows)
         self.emit(
             "CASES_FROZEN",
             message=f"已冻结本次压测用例，共 {len(rows)} 条。",
@@ -1333,7 +1512,7 @@ class TaskArtifacts:
             "sticky_failures": self.sticky,
             "result_directory": str(self.run_dir),
             "completed": completed_rows,
-            "planned": self._frozen_case_count,
+            "planned": self._planned_case_count or self._frozen_case_count,
             "valid": valid,
             "success_rate": reconciliation["success_rate"],
             "first_failure": reconciliation["first_failure"],
@@ -1406,6 +1585,7 @@ class DeviceRuntime:
         manager: Any,
         *,
         cursors: Mapping[str, int] | None = None,
+        initialization_events: Iterable[Any] | None = None,
         recovery_reason: str = "startup",
     ) -> dict[str, Any]:
         """Verify all profile initialization commands after a completed boot.
@@ -1424,7 +1604,9 @@ class DeviceRuntime:
         result = ProfileRecoveryStateMachine(self.profile, self.artifacts, manager).run(
             timeout_s,
             cursors=cursors,
+            initialization_events=initialization_events,
             recovery_reason=recovery_reason,
+            stable_for_s=stable_for_s,
         )
         if result.get("status") == "PASS":
             self.start_restart_recovery(
