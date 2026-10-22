@@ -12,6 +12,8 @@ result/<timestamp>_<task>/
 
 `serial_logs` 是连续原始证据；`tool.log` 是唯一人读执行账本；`results.csv` 每 case 一行；`cases.csv` 在设备动作前冻结。固定任务一次性冻结全部 case；随机长压只冻结任务身份，每条随机 case 生成后、播放或发送串口命令前立即追加到 `cases.csv`。未生成的轮次不得出现在该文件中。
 
+这是可选扩展，不改变原有“一次运行一个目录”的默认契约。若需要“同一设备 + 同一任务”的多次运行共用一个目录，可显式传入 `TaskArtifacts(..., run_name="<固定目录名>", append=True)`：同一 `run_name` 会复用该目录，并向 `serial_logs`、`tool.log`、`results.csv`、`cases.csv` 追加。该模式只用于同一逻辑任务，不得把不同设备或不同任务混入同一目录。多设备批次建议目录名：`<批次时间戳>_<场景>_<设备ID>_<任务简介>_<总次数>rounds`。
+
 所有 `tool.log` 行使用北京时间 `YYYY-MM-DD HH:mm:ss.SSS`，标签只能是 `[SYSTEM]`、`[CASE]`、`[ACTION]`、`[COMMAND]`、`[DEVICE]`、`[ONLINE]`、`[PLAYER]`、`[ERROR]`、`[RESULT]`、`[SUMMARY]`。冒号右侧必须是 profile 正则捕获的原始值。
 
 ```text
