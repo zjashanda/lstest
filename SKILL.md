@@ -82,6 +82,12 @@ python -u lstest/scripts/lstest.py audio scan --direction Render --json
 - `scripts/serial_recovery.py`：通用串口断开重连工具，多次关闭/重开串口并用 probe 检查提示符恢复。
 - 项目适配层应在压测启动前调用清理，并在控制口/CSK 口无响应时调用重连；只有全部重连失败才标记基础设施异常。
 
+## 长时间压测统计与子进程清理
+
+- 不要用 `list(csv.DictReader(...))` 全量加载 `results.csv`；长时间压测时单行可能很大，必须使用 `scripts/result_stats.py` 的 `ResultSummary` 增量读取，只解析上次位置之后的新增行。
+- 多设备实时汇总应复用 `ResultSummary` 缓存；最终统计也复用缓存，避免反复全量扫描 `results.csv`。
+- 启动子进程后调用 `environment_cleanup.register_process_cleanup(...)`，异常退出时自动终止子进程树；单个 PID 可使用 `environment_cleanup.kill_process_tree(pid)`，避免残留压测和播放进程。
+
 ## 单轮交互结果与验收模式
 
 单轮交互结果统一为：

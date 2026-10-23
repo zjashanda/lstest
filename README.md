@@ -40,6 +40,7 @@
 - `scripts/smoke.py`
 - `scripts/timeline.py`
 - `scripts/timing.py`
+- `scripts/result_stats.py`
 - `scripts/result_validation.py`
 - `scripts/verdict.py`
 - `SKILL.md`
@@ -47,6 +48,7 @@
 - `tests/test_foundation.py`
 - `tests/test_p0_contracts.py`
 - `tests/test_profile_driven.py`
+- `tests/test_result_stats.py`
 
 ## Install the skill
 
