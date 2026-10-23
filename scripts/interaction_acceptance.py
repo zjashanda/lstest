@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import Iterable
 
+try:
+    from .verdict import Verdict, VerdictLayerResult, VerdictStatus, aggregate_verdict
+except ImportError:  # direct execution fallback
+    from verdict import Verdict, VerdictLayerResult, VerdictStatus, aggregate_verdict  # type: ignore
+
 OUTCOMES = ("hit", "misheard", "empty", "asleep")
 
 OUTCOME_LABELS = {
@@ -136,3 +141,98 @@ def evaluate_run(outcomes: Iterable[str], mode: str) -> tuple[bool, str]:
         if not any(item in {"hit", "misheard"} for item in values):
             return False, "ASR 全程没有识别结果"
     return True, "整轮任务验收通过"
+
+
+def _round_anomaly_codes(
+    outcome: str,
+    mode: str,
+    *,
+    wake_playback_count: int,
+    wake_playback_complete: bool,
+    asr_response_count: int,
+    asr_playback_count: int,
+    asr_playback_complete: bool,
+    multi_result: bool,
+) -> tuple[str, ...]:
+    config = MODES.get(mode, {})
+    codes: list[str] = []
+    if outcome == "asleep":
+        codes.append("ASLEEP")
+    if multi_result and config.get("reject_multi_result"):
+        codes.append("MULTI_RESULT")
+    if config.get("wake_playback"):
+        if wake_playback_count < 1:
+            codes.append("WAKE_PLAYBACK_MISSING")
+        elif not wake_playback_complete:
+            codes.append("WAKE_PLAYBACK_INCOMPLETE")
+    if config.get("asr_playback") and outcome in {"hit", "misheard"}:
+        if asr_response_count < 1:
+            codes.append("ASR_RESPONSE_MISSING")
+        elif asr_playback_count < 1:
+            codes.append("ASR_PLAYBACK_MISSING")
+        elif not asr_playback_complete:
+            codes.append("ASR_PLAYBACK_INCOMPLETE")
+    return tuple(dict.fromkeys(codes))
+
+
+def round_verdict(
+    outcome: str,
+    mode: str,
+    *,
+    wake_playback_count: int = 0,
+    wake_playback_complete: bool = False,
+    asr_response_count: int = 0,
+    asr_playback_count: int = 0,
+    asr_playback_complete: bool = False,
+    multi_result: bool = False,
+) -> Verdict:
+    """Convert one acceptance-mode decision into the framework verdict model."""
+    ok, reason = evaluate_round(
+        outcome,
+        mode,
+        wake_playback_count=wake_playback_count,
+        wake_playback_complete=wake_playback_complete,
+        asr_response_count=asr_response_count,
+        asr_playback_count=asr_playback_count,
+        asr_playback_complete=asr_playback_complete,
+        multi_result=multi_result,
+    )
+    layer = VerdictLayerResult(
+        "functional",
+        VerdictStatus.PASS if ok else VerdictStatus.FAIL,
+        True,
+        "test-design",
+        reason,
+    )
+    codes = _round_anomaly_codes(
+        outcome,
+        mode,
+        wake_playback_count=wake_playback_count,
+        wake_playback_complete=wake_playback_complete,
+        asr_response_count=asr_response_count,
+        asr_playback_count=asr_playback_count,
+        asr_playback_complete=asr_playback_complete,
+        multi_result=multi_result,
+    )
+    return aggregate_verdict([layer], anomaly_codes=codes, primary_reason=reason)
+
+
+def run_verdict(outcomes: Iterable[str], mode: str) -> Verdict:
+    """Convert task-level acceptance constraints into a verdict."""
+    values = list(outcomes)
+    ok, reason = evaluate_run(values, mode)
+    layer = VerdictLayerResult(
+        "functional",
+        VerdictStatus.PASS if ok else VerdictStatus.FAIL,
+        True,
+        "test-design",
+        reason,
+    )
+    codes: list[str] = []
+    if not values:
+        codes.append("NO_INTERACTION_RESULTS")
+    elif mode in {"asr_optional", "asr_optional_playback"} and not any(
+        item in {"hit", "misheard"} for item in values
+    ):
+        codes.append("ASR_OPTIONAL_EMPTY")
+    return aggregate_verdict([layer], anomaly_codes=codes, primary_reason=reason)
