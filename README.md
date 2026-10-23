@@ -96,6 +96,7 @@ Then restart Codex.
 python -u lstest/scripts/lstest.py --help
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json>
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --capabilities <capabilities.json>
+python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --cases <cases.json> --requirements <requirements.json> --corpus <corpus.json> --capabilities <capabilities.json>
 python -u lstest/scripts/lstest.py result validate <run-dir> --json
 python -u lstest/scripts/lstest.py result validate <run-dir> --requirements <requirements.json> --corpus <corpus.json> --capabilities <capabilities.json>
 python -u lstest/scripts/lstest.py result cleanup <run-dir> --confirm

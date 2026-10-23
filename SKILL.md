@@ -52,6 +52,7 @@ description: 面向新设备项目的通用测试验证与压测框架，提供�
 python -u lstest/scripts/lstest.py --help
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json>
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --capabilities <capabilities.json>
+python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --cases <cases.json> --requirements <requirements.json> --corpus <corpus.json> --capabilities <capabilities.json>
 python -u lstest/scripts/lstest.py result validate <run-dir> --json
 python -u lstest/scripts/lstest.py result validate <run-dir> --requirements <requirements.json> --corpus <corpus.json> --capabilities <capabilities.json>
 python -u lstest/scripts/lstest.py result cleanup <run-dir> --confirm

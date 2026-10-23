@@ -72,3 +72,20 @@ python -u lstest/scripts/lstest.py result validate <run-dir> --json
 - `BLOCKED`：退出码 3。
 - 必需能力缺失时，`preflight --capabilities` 返回 `BLOCKED` 和退出码 3。
 - 显式传入 `--allow-blocked` 时，`result validate` 对 `BLOCKED` 返回 0，便于人工审核后继续流水线；默认仍返回 3。
+
+## 单轮验收模式映射
+
+`interaction_acceptance.round_verdict()` 将 8 个验收模式统一映射到 `functional` 层：
+
+| 模式 | 单轮通过条件 |
+| --- | --- |
+| `wake_only` | 必须唤醒 |
+| `wake_playback` | 唤醒 + 唤醒播报完整 |
+| `strict` | 唤醒 + 严格命中词表 |
+| `strict_playback` | 严格命中 + 唤醒/识别播报完整 |
+| `any_asr` | 唤醒 + 至少有一条识别结果 |
+| `any_asr_playback` | 任意识别 + 播报完整 |
+| `asr_optional` | 单轮允许 `empty`，任务级至少一次 `hit`/`misheard` |
+| `asr_optional_playback` | 识别容错 + 播报完整 |
+
+单轮结果使用 `hit`、`misheard`、`empty`、`asleep`；`asleep`、严格模式误识别、多结果、缺少播报都会映射为 `functional` FAIL。任务级 `run_verdict()` 负责 `asr_optional` 的“全程至少一次非空”约束。
