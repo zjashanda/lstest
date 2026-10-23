@@ -10,6 +10,11 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+try:
+    from .case_contract import assert_case_contract
+except ImportError:  # direct execution fallback
+    from case_contract import assert_case_contract  # type: ignore
+
 
 class ManifestError(ValueError):
     def __init__(self, code: str, message: str) -> None:
@@ -69,3 +74,73 @@ def load_corpus(path: Path | str) -> frozenset[str]:
     if isinstance(payload, Mapping) and "corpora" in payload:
         return _extract_ids(payload, key="corpora", id_fields=("id", "corpus_id"), label=str(path))
     return _extract_ids(payload, key="corpus", id_fields=("id", "corpus_id"), label=str(path))
+
+
+def load_cases(path: Path | str) -> list[dict[str, Any]]:
+    payload = _read_payload(path)
+    if isinstance(payload, Mapping):
+        version = payload.get("schema_version", 1)
+        if version != 1:
+            raise ManifestError("MANIFEST_SCHEMA_UNSUPPORTED", f"{path}: unsupported schema_version {version!r}")
+        items = payload.get("cases")
+    else:
+        items = payload
+    if not isinstance(items, list):
+        raise ManifestError("MANIFEST_INVALID", f"{path}: cases must be a list")
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(items):
+        if not isinstance(item, Mapping):
+            raise ManifestError("MANIFEST_INVALID", f"{path}: cases[{index}] must be an object")
+        case_id = str(item.get("case_id") or "").strip()
+        if not case_id:
+            raise ManifestError("MANIFEST_INVALID", f"{path}: cases[{index}] requires case_id")
+        if case_id in seen:
+            raise ManifestError("MANIFEST_DUPLICATE_ID", f"{path}: duplicate case_id {case_id}")
+        seen.add(case_id)
+        if "case_contract" in item:
+            contract = item.get("case_contract")
+        elif "timeline" in item:
+            contract = {"timeline": item.get("timeline")}
+        else:
+            contract = {}
+        if not isinstance(contract, Mapping):
+            raise ManifestError("MANIFEST_INVALID", f"{path}: cases[{index}].case_contract must be an object")
+        result.append({"case_id": case_id, "case_contract": dict(contract)})
+    return result
+
+
+def validate_case_manifest(
+    cases: Iterable[Mapping[str, Any]],
+    *,
+    profile: Any,
+    requirement_ids: Iterable[str] | None = None,
+    capability_ids: Iterable[str] | None = None,
+    corpus_ids: Iterable[str] | None = None,
+) -> list[str]:
+    """Validate static case contracts before any hardware action."""
+    items = list(cases)
+    case_ids = [str(item.get("case_id") or "") for item in items]
+    errors: list[str] = []
+    for item in items:
+        case_id = str(item.get("case_id") or "")
+        contract = item.get("case_contract") or {}
+        try:
+            profile.normalized_case_contract(
+                {"case_contract": contract, "case_id": case_id},
+                case_id=case_id,
+            )
+        except Exception as error:
+            errors.append(f"{case_id}: {error}")
+        try:
+            assert_case_contract(
+                contract,
+                case_id=case_id,
+                known_case_ids=case_ids,
+                known_requirement_ids=requirement_ids,
+                capability_ids=capability_ids,
+                corpus_ids=corpus_ids,
+            )
+        except Exception as error:
+            errors.append(f"{case_id}: {error}")
+    return errors

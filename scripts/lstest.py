@@ -25,7 +25,7 @@ try:
     from .profile import DeviceProfile, ProfileError
     from .smoke import run_smoke
     from .capabilities import CapabilityError, load_capabilities, probe_capabilities
-    from .manifests import ManifestError, load_corpus, load_requirements
+    from .manifests import ManifestError, load_cases, load_corpus, load_requirements, validate_case_manifest
     from .result_validation import validate_run_dir
 except ImportError:
     from audio_synthesis import (
@@ -36,7 +36,7 @@ except ImportError:
     from profile import DeviceProfile, ProfileError
     from smoke import run_smoke
     from capabilities import CapabilityError, load_capabilities, probe_capabilities  # type: ignore
-    from manifests import ManifestError, load_corpus, load_requirements  # type: ignore
+    from manifests import ManifestError, load_cases, load_corpus, load_requirements, validate_case_manifest  # type: ignore
     from result_validation import validate_run_dir  # type: ignore
 
 
@@ -136,6 +136,9 @@ def parser() -> argparse.ArgumentParser:
 
     pre.add_argument("--profile", type=Path, required=True)
     pre.add_argument("--capabilities", type=Path)
+    pre.add_argument("--cases", type=Path)
+    pre.add_argument("--requirements", type=Path)
+    pre.add_argument("--corpus", type=Path)
     pre.add_argument("--port", action="append", default=[])
     pre.add_argument("--baudrate", type=int, default=0)
     pre.add_argument("--playback-device-key")
@@ -287,8 +290,30 @@ def main(argv: list[str] | None = None) -> int:
         profile = DeviceProfile.load(args.profile)
         if args.command == "preflight":
             capability_payload = None
-            if getattr(args, "capabilities", None):
-                specs = load_capabilities(args.capabilities)
+            specs = load_capabilities(args.capabilities) if getattr(args, "capabilities", None) else []
+            requirement_ids = load_requirements(args.requirements) if getattr(args, "requirements", None) else None
+            corpus_ids = load_corpus(args.corpus) if getattr(args, "corpus", None) else None
+            case_count = None
+            if getattr(args, "cases", None):
+                cases = load_cases(args.cases)
+                case_errors = validate_case_manifest(
+                    cases,
+                    profile=profile,
+                    requirement_ids=requirement_ids,
+                    capability_ids={spec.capability_id for spec in specs} if specs else None,
+                    corpus_ids=corpus_ids,
+                )
+                if case_errors:
+                    print(json.dumps({
+                        "status": "BLOCKED",
+                        "profile_id": profile.profile_id,
+                        "profile_sha256": profile.sha256,
+                        "connection": connection.to_dict(),
+                        "case_manifest_errors": case_errors,
+                    }, ensure_ascii=False, indent=2))
+                    return 3
+                case_count = len(cases)
+            if specs:
                 capability_payload = probe_capabilities(specs)
                 if capability_payload["status"] == "BLOCKED":
                     print(json.dumps({
@@ -307,6 +332,12 @@ def main(argv: list[str] | None = None) -> int:
             }
             if capability_payload is not None:
                 payload["capabilities"] = capability_payload
+            if case_count is not None:
+                payload["case_manifest_cases"] = case_count
+            if requirement_ids is not None:
+                payload["requirements"] = sorted(requirement_ids)
+            if corpus_ids is not None:
+                payload["corpora"] = sorted(corpus_ids)
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
         summary = run_smoke(connection, args.profile, hardware=args.hardware)

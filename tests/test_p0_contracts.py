@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from lstest.scripts.lstest import main
-from lstest.scripts.manifests import load_corpus, load_requirements
+from lstest.scripts.manifests import load_cases, load_corpus, load_requirements, validate_case_manifest
 
 from lstest.scripts.capabilities import (
     CapabilityError,
@@ -240,6 +240,54 @@ class ManifestTests(unittest.TestCase):
             }), encoding="utf-8")
             self.assertEqual(load_requirements(requirements), frozenset({"R-001", "R-002"}))
             self.assertEqual(load_corpus(corpus), frozenset({"corpus-v1"}))
+
+
+    def test_case_manifest_unknown_requirement_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cases.json"
+            path.write_text(json.dumps({
+                "schema_version": 1,
+                "cases": [{
+                    "case_id": "case-001",
+                    "case_contract": {
+                        "timeline": {},
+                        "lstest": {"requirement_ids": ["R-001"]},
+                    },
+                }],
+            }), encoding="utf-8")
+            cases = load_cases(path)
+
+            class Profile:
+                def normalized_case_contract(self, metadata, *, case_id=""):
+                    return None
+
+            errors = validate_case_manifest(cases, profile=Profile(), requirement_ids={"R-999"})
+            self.assertTrue(any("CASE_REQUIREMENT_UNKNOWN" in error for error in errors))
+
+    def test_preflight_accepts_case_manifest_without_hardware(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile.json"
+            profile.write_text(json.dumps({"schema_version": 1, "profile_id": "fixture"}), encoding="utf-8")
+            requirements = root / "requirements.json"
+            requirements.write_text(json.dumps({"schema_version": 1, "requirements": ["R-001"]}), encoding="utf-8")
+            cases = root / "cases.json"
+            cases.write_text(json.dumps({
+                "schema_version": 1,
+                "cases": [{
+                    "case_id": "case-001",
+                    "case_contract": {"timeline": {}, "lstest": {"requirement_ids": ["R-001"]}},
+                }],
+            }), encoding="utf-8")
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main([
+                    "preflight",
+                    "--profile", str(profile),
+                    "--cases", str(cases),
+                    "--requirements", str(requirements),
+                ])
+            self.assertEqual(code, 0, output.getvalue())
 
 
 class ResultValidationTests(unittest.TestCase):
