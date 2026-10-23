@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    {
+      "id": "device-serial",
+      "required": true,
+      "check": "serial_port",
+      "params": {
+        "port": "COM3",
+        "baud": 115200
+      },
+      "blocked_reason": "device serial port is unavailable"
+    },
+    {
+      "id": "playback-render",
+      "required": true,
+      "check": "audio_device",
+      "params": {
+        "device_key": "usb:0000:0000:00",
+        "direction": "Render"
+      }
+    },
+    {
+      "id": "firmware-image",
+      "required": true,
+      "check": "file",
+      "params": {
+        "path": "artifacts/firmware.bin",
+        "sha256": ""
+      }
+    },
+    {
+      "id": "laid-cli",
+      "required": false,
+      "check": "command",
+      "params": {
+        "command": "laid",
+        "version_args": [
+          "--version"
+        ]
+      }
+    }
+  ]
+}

@@ -24,6 +24,8 @@ try:
     from .core import ConnectionSpec
     from .profile import DeviceProfile, ProfileError
     from .smoke import run_smoke
+    from .capabilities import CapabilityError, load_capabilities, probe_capabilities
+    from .result_validation import validate_run_dir
 except ImportError:
     from audio_synthesis import (
         DEFAULT_PITCH, DEFAULT_RATE, DEFAULT_VOICE, DEFAULT_VOLUME, load_text_manifest,
@@ -32,6 +34,8 @@ except ImportError:
     from core import ConnectionSpec
     from profile import DeviceProfile, ProfileError
     from smoke import run_smoke
+    from capabilities import CapabilityError, load_capabilities, probe_capabilities  # type: ignore
+    from result_validation import validate_run_dir  # type: ignore
 
 
 def parse_ports(values: list[str], baudrate: int) -> list[dict[str, object]]:
@@ -105,7 +109,19 @@ def parser() -> argparse.ArgumentParser:
     dual.add_argument("--gap", type=float, default=0.0)
     dual.add_argument("--skip-probe", action="store_true")
     pre = sub.add_parser("preflight", help="只检查 profile 和输入，不打开硬件")
+    result = sub.add_parser("result", help="校验 lstest 结果目录")
+    result_sub = result.add_subparsers(dest="result_command", required=True)
+    result_validate = result_sub.add_parser("validate", help="只读校验四个结果产物")
+    result_validate.add_argument("run_dir", type=Path)
+    result_validate.add_argument("--json", action="store_true")
+    result_validate.add_argument(
+        "--allow-blocked",
+        action="store_true",
+        help="以 0 退出码返回 BLOCKED，便于人工审核后继续流水线",
+    )
+
     pre.add_argument("--profile", type=Path, required=True)
+    pre.add_argument("--capabilities", type=Path)
     pre.add_argument("--port", action="append", default=[])
     pre.add_argument("--baudrate", type=int, default=0)
     pre.add_argument("--playback-device-key")
@@ -161,6 +177,25 @@ def run_audio_tool(args: argparse.Namespace) -> int:
     return completed.returncode
 
 
+def run_result_command(args: argparse.Namespace) -> int:
+    if args.result_command != "validate":
+        raise ValueError(f"unsupported result command: {args.result_command}")
+    payload = validate_run_dir(args.run_dir)
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"result: {payload.get('status')}")
+        print(f"run_dir: {payload.get('run_dir')}")
+        print(f"cases: {payload.get('cases', 0)} results: {payload.get('results', 0)}")
+        for issue in payload.get("issues", []):
+            print(f"  {issue.get('code')}: {issue.get('message')}")
+    if payload.get("status") == "PASS":
+        return 0
+    if payload.get("status") == "BLOCKED":
+        return 0 if getattr(args, "allow_blocked", False) else 3
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if args.command == "list":
@@ -173,6 +208,8 @@ def main(argv: list[str] | None = None) -> int:
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2) if args.json else "\n".join(payload["capabilities"]))
         return 0
+    if args.command == "result":
+        return run_result_command(args)
     try:
         if args.command == "tts":
             text = args.text
@@ -199,7 +236,28 @@ def main(argv: list[str] | None = None) -> int:
         connection = ConnectionSpec.from_mapping({"ports": parse_ports(args.port, args.baudrate) if args.port else [], "playback_device_key": args.playback_device_key, "capture_device_key": getattr(args, "capture_device_key", None), "profile_id": str(args.profile), "result_root": str(args.result_root)})
         profile = DeviceProfile.load(args.profile)
         if args.command == "preflight":
-            print(json.dumps({"status": "PASS", "profile_id": profile.profile_id, "profile_sha256": profile.sha256, "connection": connection.to_dict()}, ensure_ascii=False, indent=2))
+            capability_payload = None
+            if getattr(args, "capabilities", None):
+                specs = load_capabilities(args.capabilities)
+                capability_payload = probe_capabilities(specs)
+                if capability_payload["status"] == "BLOCKED":
+                    print(json.dumps({
+                        "status": "BLOCKED",
+                        "profile_id": profile.profile_id,
+                        "profile_sha256": profile.sha256,
+                        "connection": connection.to_dict(),
+                        "capabilities": capability_payload,
+                    }, ensure_ascii=False, indent=2))
+                    return 3
+            payload = {
+                "status": "PASS",
+                "profile_id": profile.profile_id,
+                "profile_sha256": profile.sha256,
+                "connection": connection.to_dict(),
+            }
+            if capability_payload is not None:
+                payload["capabilities"] = capability_payload
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
         summary = run_smoke(connection, args.profile, hardware=args.hardware)
         return 0 if summary["status"] in {"PASS", "WARN"} else 2
