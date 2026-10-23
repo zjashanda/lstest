@@ -32,10 +32,12 @@
 - `scripts/smoke.py`
 - `scripts/timeline.py`
 - `scripts/timing.py`
+- `scripts/result_stats.py`
 - `SKILL.md`
 - `tests/__init__.py`
 - `tests/test_foundation.py`
 - `tests/test_profile_driven.py`
+- `tests/test_result_stats.py`
 
 ## Install the skill
 
