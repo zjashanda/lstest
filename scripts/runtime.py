@@ -200,7 +200,8 @@ class ScenarioRuntime:
             required_types: set[str] = set()
             for item in frozen_cases:
                 metadata = getattr(item, "metadata", {}) if not isinstance(item, Mapping) else item.get("metadata", item)
-                contract = self.profile.case_contract(metadata if isinstance(metadata, Mapping) else {})
+                case_id = getattr(item, "case_id", "") if not isinstance(item, Mapping) else str(item.get("case_id", ""))
+                contract = self.profile.case_contract(metadata if isinstance(metadata, Mapping) else {}, case_id=case_id)
                 required_keys = {str(key).upper() for key in contract.get("required_facts", ())}
                 for event_type, registry in EVENT_REGISTRY.items():
                     if registry["key"] in required_keys:
@@ -235,7 +236,8 @@ class ScenarioRuntime:
     def declare_case(self, case: Any) -> int:
         metadata = getattr(case, "metadata", {}) if not isinstance(case, Mapping) else case.get("metadata", case)
         if self.profile is not None and self.profile.is_formal:
-            self.profile.case_contract(metadata if isinstance(metadata, Mapping) else {})
+            case_id = getattr(case, "case_id", "") if not isinstance(case, Mapping) else str(case.get("case_id", ""))
+            self.profile.case_contract(metadata if isinstance(metadata, Mapping) else {}, case_id=case_id)
         return self.artifacts.declare_case(case)
 
     def current_wake_word(self) -> dict[str, Any]:

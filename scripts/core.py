@@ -17,9 +17,11 @@ from typing import Any, Iterable, Mapping, Protocol, Sequence
 try:
     from .observations import RawTag, ToolJudgement, raw_tags_from_mappings, render_observation
     from .timeline import TimelineLedger, ToolLogValidator, safe_basename
+    from .verdict import verdict_from_status
 except ImportError:  # direct execution fallback
     from observations import RawTag, ToolJudgement, raw_tags_from_mappings, render_observation
     from timeline import TimelineLedger, ToolLogValidator, safe_basename
+    from verdict import verdict_from_status  # type: ignore
 
 BEIJING = timezone(timedelta(hours=8))
 STICKY_FATAL_MARKERS = {
@@ -1029,25 +1031,31 @@ class TaskArtifacts:
             raise RuntimeError("declare_case is only available after begin_lazy_cases")
         if isinstance(case, CaseSpec):
             metadata = dict(case.metadata)
+            raw_contract = metadata.get("case_contract")
+            if raw_contract is None:
+                raw_contract = metadata.get("timeline", {})
             row = {
                 "case_id": case.case_id,
                 "scenario": metadata.get("scenario") or case.domain or self._lazy_case_identity["scenario"],
                 "input_text": case.text,
                 "audio_file": case.audio_path or "",
-                "case_contract": metadata.get("timeline", {}),
-                "timeline": metadata.get("timeline", {}),
+                "case_contract": raw_contract,
+                "timeline": raw_contract.get("timeline", raw_contract) if isinstance(raw_contract, Mapping) else {},
                 "source_file": metadata.get("source_file", ""),
                 "source_sha256": metadata.get("source_sha256", ""),
             }
         else:
             raw = dict(case)
+            raw_contract = raw.get("case_contract")
+            if raw_contract is None:
+                raw_contract = raw.get("timeline", {})
             row = {
                 "case_id": raw.get("case_id", ""),
                 "scenario": raw.get("scenario", raw.get("domain", self._lazy_case_identity["scenario"])),
                 "input_text": raw.get("input_text", raw.get("text", "")),
                 "audio_file": raw.get("audio_file", raw.get("audio_path", "")),
-                "case_contract": raw.get("timeline", raw.get("case_contract", {})),
-                "timeline": raw.get("timeline", {}),
+                "case_contract": raw_contract,
+                "timeline": raw_contract.get("timeline", raw_contract) if isinstance(raw_contract, Mapping) else {},
                 "source_file": raw.get("source_file", ""),
                 "source_sha256": raw.get("source_sha256", ""),
             }
@@ -1074,6 +1082,7 @@ class TaskArtifacts:
                 "input_text": row.get("input_text", ""),
                 "audio_path": row.get("audio_file", ""),
                 "timeline": row.get("timeline", {}),
+                "case_contract": row.get("case_contract", {}),
                 "profile_version": self._lazy_case_identity["profile_version"],
                 "profile_sha256": self._lazy_case_identity["profile_sha256"],
             }
@@ -1105,25 +1114,31 @@ class TaskArtifacts:
             for order, value in enumerate(rows, start=1):
                 if isinstance(value, CaseSpec):
                     metadata = dict(value.metadata)
+                    raw_contract = metadata.get("case_contract")
+                    if raw_contract is None:
+                        raw_contract = metadata.get("timeline", {})
                     row = {
                         "case_id": value.case_id,
                         "scenario": metadata.get("scenario") or value.domain or "",
                         "input_text": value.text,
                         "audio_file": value.audio_path or "",
-                        "case_contract": metadata.get("timeline", {}),
-                        "timeline": metadata.get("timeline", {}),
+                        "case_contract": raw_contract,
+                        "timeline": raw_contract.get("timeline", raw_contract) if isinstance(raw_contract, Mapping) else {},
                         "source_file": metadata.get("source_file", ""),
                         "source_sha256": metadata.get("source_sha256", ""),
                     }
                 else:
                     raw = dict(value)
+                    raw_contract = raw.get("case_contract")
+                    if raw_contract is None:
+                        raw_contract = raw.get("timeline", {})
                     row = {
                         "case_id": raw.get("case_id", ""),
                         "scenario": raw.get("scenario", raw.get("domain", "")),
                         "input_text": raw.get("input_text", raw.get("text", "")),
                         "audio_file": raw.get("audio_file", raw.get("audio_path", "")),
-                        "case_contract": raw.get("timeline", raw.get("case_contract", {})),
-                        "timeline": raw.get("timeline", {}),
+                        "case_contract": raw_contract,
+                        "timeline": raw_contract.get("timeline", raw_contract) if isinstance(raw_contract, Mapping) else {},
                         "source_file": raw.get("source_file", ""),
                         "source_sha256": raw.get("source_sha256", ""),
                     }
@@ -1144,6 +1159,7 @@ class TaskArtifacts:
                         "input_text": row.get("input_text", ""),
                         "audio_path": row.get("audio_file", ""),
                         "timeline": row.get("timeline", {}),
+                        "case_contract": row.get("case_contract", {}),
                         "profile_version": profile_version,
                         "profile_sha256": profile_sha256,
                     }
@@ -1324,6 +1340,15 @@ class TaskArtifacts:
         if isinstance(raw_codes, str):
             raw_codes = [raw_codes]
         anomaly_codes = [*raw_codes, *[item.get("reason", "") for item in associations if isinstance(item, Mapping) and item.get("status") != "PASS"]]
+        lstest_meta = facts.get("_lstest")
+        if not isinstance(lstest_meta, Mapping):
+            lstest_meta = {}
+        if not isinstance(lstest_meta.get("verdict"), Mapping):
+            verdict = verdict_from_status(status, timeline_result.get("reason", result.reason), anomaly_codes=anomaly_codes)
+            lstest_meta = {**lstest_meta, "schema_version": 1, "verdict": verdict.to_dict()}
+        else:
+            lstest_meta = {**lstest_meta, "schema_version": int(lstest_meta.get("schema_version", 1) or 1)}
+        facts["_lstest"] = dict(lstest_meta)
         profile_version = self._case_metadata.get(result.case_id, {}).get("profile_version", "")
         profile_sha256 = self._case_metadata.get(result.case_id, {}).get("profile_sha256", "")
         with self._lock:

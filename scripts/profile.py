@@ -14,6 +14,11 @@ try:
 except ImportError:  # direct execution fallback
     from core import sha256_file
 
+try:
+    from .case_contract import CaseContractError, NormalizedCaseContract, normalize_case_contract
+except ImportError:  # direct execution fallback
+    from case_contract import CaseContractError, NormalizedCaseContract, normalize_case_contract  # type: ignore
+
 
 class ProfileError(ValueError):
     pass
@@ -566,19 +571,25 @@ class DeviceProfile:
             raise ProfileError(f"BLOCKED_PROFILE_CONTRACT missing event rules: {', '.join(sorted(missing))}")
         ProfileFixtureRunner(self).assert_valid()
 
-    def case_contract(self, metadata: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Return a declared case contract without inferring any project field."""
-        timeline = metadata.get("timeline", {}) if isinstance(metadata, Mapping) else {}
-        if not isinstance(timeline, Mapping):
-            raise ProfileError("BLOCKED_PROFILE_CONTRACT case timeline must be an object")
-        required = timeline.get("required_facts", ())
-        if not isinstance(required, (list, tuple, set)):
-            raise ProfileError("BLOCKED_PROFILE_CONTRACT required_facts must be a list")
+    def normalized_case_contract(self, metadata: Mapping[str, Any], *, case_id: str = "") -> NormalizedCaseContract:
+        """Return the validated case contract, accepting legacy timeline-only payloads."""
+        if not isinstance(metadata, Mapping):
+            raise ProfileError("BLOCKED_PROFILE_CONTRACT case metadata must be an object")
+        if "case_contract" in metadata:
+            payload = metadata.get("case_contract")
+        elif "timeline" in metadata:
+            payload = metadata
+        else:
+            payload = {}
         registry_keys = {entry["key"] for entry in EVENT_REGISTRY.values()}
-        unknown = {str(item).upper() for item in required} - registry_keys
-        if unknown:
-            raise ProfileError("BLOCKED_PROFILE_CONTRACT unknown required facts: " + ", ".join(sorted(unknown)))
-        return dict(timeline)
+        try:
+            return normalize_case_contract(payload, case_id=case_id or str(metadata.get("case_id") or ""), known_fact_keys=registry_keys)
+        except CaseContractError as error:
+            raise ProfileError(f"BLOCKED_PROFILE_CONTRACT {error.code}: {error}") from error
+
+    def case_contract(self, metadata: Mapping[str, Any], *, case_id: str = "") -> Mapping[str, Any]:
+        """Return the declared timeline contract without inferring any project field."""
+        return dict(self.normalized_case_contract(metadata, case_id=case_id).timeline)
 
     @staticmethod
     def _source_matches(rule: Mapping[str, Any], record: RawLogRecord) -> bool:
