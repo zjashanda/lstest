@@ -53,6 +53,7 @@ python -u lstest/scripts/lstest.py --help
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json>
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --capabilities <capabilities.json>
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --cases <cases.json> --requirements <requirements.json> --corpus <corpus.json> --capabilities <capabilities.json>
+python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --require-base-facts
 python -u lstest/scripts/lstest.py result validate <run-dir> --json
 python -u lstest/scripts/lstest.py result validate <run-dir> --requirements <requirements.json> --corpus <corpus.json> --capabilities <capabilities.json>
 python -u lstest/scripts/lstest.py result cleanup <run-dir> --confirm
@@ -64,6 +65,7 @@ python -u lstest/scripts/lstest.py audio scan --direction Render --json
 
 详细合同和可复制的项目适配模板见：
 
+- [references/base-facts.md](references/base-facts.md)
 - [references/case-contract.md](references/case-contract.md)
 - [references/verdict-policy.md](references/verdict-policy.md)
 - [references/profile-driven-log-discovery.md](references/profile-driven-log-discovery.md)

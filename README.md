@@ -9,6 +9,7 @@
 - `config/capabilities.example.json`
 - `config/requirements.txt`
 - `references/acceptance.md`
+- `references/base-facts.md`
 - `references/case-contract.md`
 - `references/verdict-policy.md`
 - `references/profile-driven-log-discovery.md`
@@ -21,6 +22,7 @@
 - `scripts/__init__.py`
 - `scripts/adapter_guard.py`
 - `scripts/audio_synthesis.py`
+- `scripts/base_facts.py`
 - `scripts/capabilities.py`
 - `scripts/case_contract.py`
 - `scripts/core.py`
@@ -108,6 +110,7 @@ python -u lstest/scripts/lstest.py audio scan --direction Render --json
 
 详细合同和可复制的项目适配模板见：
 
+- [references/base-facts.md](references/base-facts.md)
 - [references/case-contract.md](references/case-contract.md)
 - [references/verdict-policy.md](references/verdict-policy.md)
 - [references/profile-driven-log-discovery.md](references/profile-driven-log-discovery.md)
