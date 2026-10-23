@@ -96,21 +96,30 @@ def _probe_serial(params: Mapping[str, Any]) -> CapabilityResult:
     if not port:
         return CapabilityResult(capability_id, "BLOCKED", "serial port is not configured", {"port": port})
     try:
-        import serial  # type: ignore
+        from serial.tools import list_ports  # type: ignore
     except Exception as error:
         return CapabilityResult(capability_id, "BLOCKED", f"pyserial unavailable: {error}", {"port": port})
-    handle = None
     try:
-        handle = serial.Serial(port, baud, timeout=0.2)
-        return CapabilityResult(capability_id, "PASS", "", {"port": port, "baud": baud})
+        matches = [
+            item for item in list_ports.comports()
+            if str(getattr(item, "device", "")).casefold() == port.casefold()
+        ]
     except Exception as error:
-        return CapabilityResult(capability_id, "BLOCKED", str(error), {"port": port, "baud": baud})
-    finally:
-        if handle is not None:
-            try:
-                handle.close()
-            except Exception:
-                pass
+        return CapabilityResult(capability_id, "BLOCKED", f"serial port enumeration failed: {error}", {"port": port})
+    if not matches:
+        return CapabilityResult(capability_id, "BLOCKED", f"serial port is not present: {port}", {"port": port, "baud": baud})
+    record = matches[0]
+    return CapabilityResult(
+        capability_id,
+        "PASS",
+        "",
+        {
+            "port": port,
+            "baud": baud,
+            "device": str(getattr(record, "device", "")),
+            "description": str(getattr(record, "description", "")),
+        },
+    )
 
 
 def _probe_audio(params: Mapping[str, Any]) -> CapabilityResult:

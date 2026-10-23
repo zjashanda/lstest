@@ -7,6 +7,8 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 from lstest.scripts.lstest import main
 
 from lstest.scripts.capabilities import (
@@ -181,6 +183,21 @@ class CapabilityTests(unittest.TestCase):
         optional = CapabilitySpec("optional", False, "file", {"path": "Z:/not-present.bin"})
         self.assertEqual(probe_capabilities([optional])["status"], "WARN")
 
+    def test_serial_capability_checks_presence_without_opening(self):
+        spec = CapabilitySpec("serial", True, "serial_port", {"port": "COM_TEST", "baud": 115200})
+        record = SimpleNamespace(device="COM_TEST", description="fixture serial")
+        with patch("serial.tools.list_ports.comports", return_value=[record]):
+            with patch("serial.Serial", side_effect=AssertionError("must not open serial port")):
+                payload = probe_capabilities([spec])
+        self.assertEqual(payload["status"], "PASS")
+        self.assertEqual(payload["results"][0]["evidence"]["device"], "COM_TEST")
+
+    def test_serial_capability_reports_missing_port(self):
+        spec = CapabilitySpec("serial", True, "serial_port", {"port": "COM_MISSING"})
+        with patch("serial.tools.list_ports.comports", return_value=[]):
+            payload = probe_capabilities([spec])
+        self.assertEqual(payload["status"], "BLOCKED")
+
     def test_invalid_capability_schema_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "capabilities.json"
@@ -207,6 +224,25 @@ class ResultValidationTests(unittest.TestCase):
             self.assertEqual(payload["status"], "PASS", payload)
             self.assertEqual(payload["cases"], 1)
             self.assertEqual(payload["results"], 1)
+
+    def test_missing_result_row_fails_validation(self):
+        temporary, run_dir = self._valid_run()
+        with temporary:
+            path = run_dir / "cases.csv"
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+                fieldnames = list(rows[0])
+            extra = dict(rows[0])
+            extra["case_id"] = "case-002"
+            extra["case_order"] = "2"
+            with path.open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows([rows[0], extra])
+            payload = validate_run_dir(run_dir)
+            self.assertEqual(payload["status"], "FAIL")
+            self.assertEqual(payload["missing_results"], ["case-002"])
+            self.assertTrue(any(item["code"] == "RESULT_ROW_MISSING" for item in payload["issues"]))
 
     def test_extra_artifact_blocks_validation(self):
         temporary, run_dir = self._valid_run()
@@ -270,6 +306,27 @@ class ResultValidationTests(unittest.TestCase):
                 code = main(["result", "validate", str(run_dir), "--allow-blocked"])
             self.assertEqual(code, 0)
             self.assertIn("result: BLOCKED", output.getvalue())
+
+    def test_cleanup_requires_confirm_and_keeps_serial_logs(self):
+        temporary, run_dir = self._valid_run()
+        with temporary:
+            serial_log = run_dir / "serial_logs" / "csk.log"
+            serial_log.write_text("device output\n", encoding="utf-8")
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(["result", "cleanup", str(run_dir)])
+            self.assertEqual(code, 2)
+            self.assertTrue((run_dir / "tool.log").is_file())
+            self.assertTrue((run_dir / "results.csv").is_file())
+            self.assertTrue((run_dir / "cases.csv").is_file())
+
+            with redirect_stdout(output):
+                code = main(["result", "cleanup", str(run_dir), "--confirm"])
+            self.assertEqual(code, 0)
+            self.assertFalse((run_dir / "tool.log").exists())
+            self.assertFalse((run_dir / "results.csv").exists())
+            self.assertFalse((run_dir / "cases.csv").exists())
+            self.assertEqual(serial_log.read_text(encoding="utf-8"), "device output\n")
 
     def test_namespaced_contract_and_verdict_are_persisted(self):
         temporary, run_dir = self._valid_run()

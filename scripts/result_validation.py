@@ -187,6 +187,15 @@ def validate_run_dir(run_dir: Path | str) -> dict[str, Any]:
             except (CaseContractError, ValueError) as error:
                 issues.append(ResultIssue("RESULT_CASE_CONTRACT_INVALID", str(error), "case_contract", case_id))
 
+    missing_results = [case_id for case_id in case_ids if case_id not in result_ids]
+    for case_id in missing_results:
+        issues.append(ResultIssue(
+            "RESULT_ROW_MISSING",
+            f"cases.csv case has no results.csv row: {case_id}",
+            "results.csv",
+            case_id,
+        ))
+
     try:
         tool_text = (root / "tool.log").read_text(encoding="utf-8", errors="replace")
     except OSError as error:
@@ -217,7 +226,7 @@ def validate_run_dir(run_dir: Path | str) -> dict[str, Any]:
         "issues": [issue.to_dict() for issue in issues],
         "cases": len(cases),
         "results": len(results),
-        "missing_results": [case_id for case_id in case_ids if case_id not in result_ids],
+        "missing_results": missing_results,
         "result_status_counts": dict(sorted(result_status_counts.items())),
         "tool_result_status_counts": dict(sorted(tool_status_counts.items())),
     }
