@@ -95,9 +95,12 @@ python -u lstest/scripts/lstest.py --help
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json>
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --capabilities <capabilities.json>
 python -u lstest/scripts/lstest.py result validate <run-dir> --json
+python -u lstest/scripts/lstest.py result cleanup <run-dir> --confirm
 python -u lstest/scripts/lstest.py tts --text-file utterance.txt --output audio/sample.mp3
 python -u lstest/scripts/lstest.py audio scan --direction Render --json
 ```
+
+`result cleanup` 只能手动执行；默认需要 `--confirm`，只删除 `tool.log`、`results.csv`、`cases.csv`，不会触碰 `serial_logs/`。系统不会自动清理任何结果目录。
 
 详细合同和可复制的项目适配模板见：
 
