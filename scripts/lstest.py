@@ -25,6 +25,7 @@ try:
     from .profile import DeviceProfile, ProfileError
     from .smoke import run_smoke
     from .capabilities import CapabilityError, load_capabilities, probe_capabilities
+    from .manifests import ManifestError, load_corpus, load_requirements
     from .result_validation import validate_run_dir
 except ImportError:
     from audio_synthesis import (
@@ -35,6 +36,7 @@ except ImportError:
     from profile import DeviceProfile, ProfileError
     from smoke import run_smoke
     from capabilities import CapabilityError, load_capabilities, probe_capabilities  # type: ignore
+    from manifests import ManifestError, load_corpus, load_requirements  # type: ignore
     from result_validation import validate_run_dir  # type: ignore
 
 
@@ -68,6 +70,7 @@ def parser() -> argparse.ArgumentParser:
     tts.add_argument("--volume", default=DEFAULT_VOLUME)
     tts.add_argument("--timeout-s", type=float, default=60.0)
     tts.add_argument("--retries", type=int, default=1)
+    tts.add_argument("--cache-dir", type=Path)
 
     tts_manifest = sub.add_parser("tts-manifest", help="按文本 manifest 批量合成并写入音频 manifest")
     tts_manifest.add_argument("--input", type=Path, required=True, help="包含 text 列的 UTF-8 CSV 或 JSONL")
@@ -79,6 +82,7 @@ def parser() -> argparse.ArgumentParser:
     tts_manifest.add_argument("--volume", default=DEFAULT_VOLUME)
     tts_manifest.add_argument("--timeout-s", type=float, default=60.0)
     tts_manifest.add_argument("--retries", type=int, default=1)
+    tts_manifest.add_argument("--cache-dir", type=Path)
 
     audio = sub.add_parser("audio", help="管理 laid、枚举声卡、探测或播放音频")
     audio_sub = audio.add_subparsers(dest="audio_command", required=True)
@@ -114,6 +118,9 @@ def parser() -> argparse.ArgumentParser:
     result_validate = result_sub.add_parser("validate", help="只读校验四个结果产物")
     result_validate.add_argument("run_dir", type=Path)
     result_validate.add_argument("--json", action="store_true")
+    result_validate.add_argument("--requirements", type=Path)
+    result_validate.add_argument("--corpus", type=Path)
+    result_validate.add_argument("--capabilities", type=Path)
     result_validate.add_argument(
         "--allow-blocked",
         action="store_true",
@@ -210,7 +217,17 @@ def run_cleanup_command(args: argparse.Namespace) -> int:
 def run_result_command(args: argparse.Namespace) -> int:
     if args.result_command != "validate":
         raise ValueError(f"unsupported result command: {args.result_command}")
-    payload = validate_run_dir(args.run_dir)
+    requirement_ids = load_requirements(args.requirements) if getattr(args, "requirements", None) else None
+    corpus_ids = load_corpus(args.corpus) if getattr(args, "corpus", None) else None
+    capability_ids = None
+    if getattr(args, "capabilities", None):
+        capability_ids = {spec.capability_id for spec in load_capabilities(args.capabilities)}
+    payload = validate_run_dir(
+        args.run_dir,
+        requirement_ids=requirement_ids,
+        capability_ids=capability_ids,
+        corpus_ids=corpus_ids,
+    )
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
@@ -238,11 +255,11 @@ def main(argv: list[str] | None = None) -> int:
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2) if args.json else "\n".join(payload["capabilities"]))
         return 0
-    if args.command == "result":
-        if args.result_command == "cleanup":
-            return run_cleanup_command(args)
-        return run_result_command(args)
     try:
+        if args.command == "result":
+            if args.result_command == "cleanup":
+                return run_cleanup_command(args)
+            return run_result_command(args)
         if args.command == "tts":
             text = args.text
             if args.text_file is not None:
@@ -250,6 +267,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = synthesize_edge_tts(
                 text, args.output, case_id=args.case_id, voice=args.voice, rate=args.rate,
                 pitch=args.pitch, volume=args.volume, timeout_s=args.timeout_s, retries=args.retries,
+                cache_dir=args.cache_dir,
             )
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
@@ -257,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
             payload = synthesize_manifest(
                 load_text_manifest(args.input), args.output_dir, args.manifest_output,
                 voice=args.voice, rate=args.rate, pitch=args.pitch, volume=args.volume,
-                timeout_s=args.timeout_s, retries=args.retries,
+                timeout_s=args.timeout_s, retries=args.retries, cache_dir=args.cache_dir,
             )
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0 if payload["status"] == "PASS" else 2

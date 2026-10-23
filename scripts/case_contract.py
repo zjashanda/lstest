@@ -194,6 +194,7 @@ def collect_case_contract_issues(
     case_id: str | None = None,
     known_fact_keys: Iterable[str] | None = None,
     known_case_ids: Iterable[str] | None = None,
+    known_requirement_ids: Iterable[str] | None = None,
     capability_ids: Iterable[str] | None = None,
     corpus_ids: Iterable[str] | None = None,
 ) -> list[CaseContractIssue]:
@@ -263,6 +264,11 @@ def collect_case_contract_issues(
         for dependency in depends_on:
             if dependency not in known_cases:
                 issues.append(CaseContractIssue("CASE_DEPENDENCY_UNKNOWN", f"unknown case dependency: {dependency}", "lstest.depends_on"))
+    if known_requirement_ids is not None:
+        known_requirements = {str(item) for item in known_requirement_ids}
+        for requirement_id in requirement_ids:
+            if requirement_id not in known_requirements:
+                issues.append(CaseContractIssue("CASE_REQUIREMENT_UNKNOWN", f"unknown requirement id: {requirement_id}", "lstest.requirement_ids"))
     if capability_ids is not None:
         known_capabilities = {str(item) for item in capability_ids}
         for capability in capabilities:
@@ -282,6 +288,7 @@ def assert_case_contract(
     case_id: str | None = None,
     known_fact_keys: Iterable[str] | None = None,
     known_case_ids: Iterable[str] | None = None,
+    known_requirement_ids: Iterable[str] | None = None,
     capability_ids: Iterable[str] | None = None,
     corpus_ids: Iterable[str] | None = None,
 ) -> None:
@@ -290,6 +297,7 @@ def assert_case_contract(
         case_id=case_id,
         known_fact_keys=known_fact_keys,
         known_case_ids=known_case_ids,
+        known_requirement_ids=known_requirement_ids,
         capability_ids=capability_ids,
         corpus_ids=corpus_ids,
     )

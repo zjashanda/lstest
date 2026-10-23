@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from lstest.scripts.lstest import main
+from lstest.scripts.manifests import load_corpus, load_requirements
 
 from lstest.scripts.capabilities import (
     CapabilityError,
@@ -152,6 +153,24 @@ class VerdictTests(unittest.TestCase):
             VerdictStatus.PARTIAL,
         )
 
+    def test_invalid_supplied_verdict_is_rejected_at_record_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "invalid-verdict")
+            artifacts.freeze_cases([CaseSpec("case-001", "fixture")])
+            artifacts.record_case(CaseResult(
+                "case-001",
+                "PASS",
+                reason="fixture",
+                facts={"_lstest": {"verdict": {"status": "PASS", "layers": []}}},
+            ))
+            artifacts.finalize("PASS", "fixture")
+            with artifacts.results_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                row = next(csv.DictReader(handle))
+            facts = json.loads(row["facts_json"])
+            self.assertEqual(facts["_lstest"]["verdict"]["status"], "PASS")
+            self.assertTrue(facts["_lstest"]["verdict_issues"])
+            self.assertIn("VERDICT_INVALID", row["anomaly_codes"])
+
     def test_verdict_payload_conflict_is_reported(self):
         issues = validate_verdict_payload({
             "status": "PASS",
@@ -206,6 +225,23 @@ class CapabilityTests(unittest.TestCase):
                 load_capabilities(path)
 
 
+class ManifestTests(unittest.TestCase):
+    def test_manifest_ids_are_loaded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            requirements = Path(directory) / "requirements.json"
+            requirements.write_text(json.dumps({
+                "schema_version": 1,
+                "requirements": [{"id": "R-001"}, "R-002"],
+            }), encoding="utf-8")
+            corpus = Path(directory) / "corpus.json"
+            corpus.write_text(json.dumps({
+                "schema_version": 1,
+                "corpora": [{"id": "corpus-v1"}],
+            }), encoding="utf-8")
+            self.assertEqual(load_requirements(requirements), frozenset({"R-001", "R-002"}))
+            self.assertEqual(load_corpus(corpus), frozenset({"corpus-v1"}))
+
+
 class ResultValidationTests(unittest.TestCase):
     def _valid_run(self) -> tuple[tempfile.TemporaryDirectory, Path]:
         temporary = tempfile.TemporaryDirectory()
@@ -224,6 +260,16 @@ class ResultValidationTests(unittest.TestCase):
             self.assertEqual(payload["status"], "PASS", payload)
             self.assertEqual(payload["cases"], 1)
             self.assertEqual(payload["results"], 1)
+
+    def test_requirement_reference_mismatch_fails_validation(self):
+        temporary, run_dir = self._valid_run()
+        with temporary:
+            payload = validate_run_dir(run_dir, requirement_ids={"R-999"})
+            self.assertEqual(payload["status"], "FAIL")
+            self.assertTrue(any(
+                item["code"] == "RESULT_CASE_CONTRACT_INVALID" and "CASE_REQUIREMENT_UNKNOWN" in item["message"]
+                for item in payload["issues"]
+            ))
 
     def test_missing_result_row_fails_validation(self):
         temporary, run_dir = self._valid_run()
@@ -251,6 +297,30 @@ class ResultValidationTests(unittest.TestCase):
             payload = validate_run_dir(run_dir)
             self.assertEqual(payload["status"], "BLOCKED")
             self.assertTrue(any(item["code"] == "RESULT_ARTIFACT_EXTRA" for item in payload["issues"]))
+
+    def test_missing_required_csv_header_fails_validation(self):
+        temporary, run_dir = self._valid_run()
+        with temporary:
+            path = run_dir / "cases.csv"
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            fields = [name for name in rows[0] if name != "case_contract"]
+            with path.open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fields)
+                writer.writeheader()
+                for row in rows:
+                    writer.writerow({key: row.get(key, "") for key in fields})
+            payload = validate_run_dir(run_dir)
+            self.assertEqual(payload["status"], "FAIL")
+            self.assertTrue(any(item["code"] == "RESULT_HEADER_MISSING" for item in payload["issues"]))
+
+    def test_stop_without_stopped_result_fails_validation(self):
+        temporary, run_dir = self._valid_run()
+        with temporary:
+            (run_dir / "STOP").write_text("stop\n", encoding="utf-8")
+            payload = validate_run_dir(run_dir)
+            self.assertEqual(payload["status"], "FAIL")
+            self.assertTrue(any(item["code"] == "RESULT_STOP_WITHOUT_STOPPED" for item in payload["issues"]))
 
     def test_missing_result_artifact_blocks_validation(self):
         temporary, run_dir = self._valid_run()
@@ -341,6 +411,50 @@ class ResultValidationTests(unittest.TestCase):
             facts = json.loads(result_row["facts_json"])
             self.assertEqual(facts["_lstest"]["schema_version"], 1)
             self.assertEqual(facts["_lstest"]["verdict"]["status"], "PASS")
+
+
+class AudioCacheTests(unittest.TestCase):
+    def test_tts_cache_hit_avoids_network_and_copies_audio(self):
+        from lstest.scripts.audio_synthesis import (
+            DEFAULT_PITCH, DEFAULT_RATE, DEFAULT_VOICE, DEFAULT_VOLUME,
+            synthesize_edge_tts, tts_cache_key,
+        )
+        metadata = {
+            "container": "mp3",
+            "codec": "mp3",
+            "sample_rate": 24000,
+            "channels": 1,
+            "duration_seconds": 1.0,
+            "mean_volume_db": -20.0,
+            "peak_volume_db": -3.0,
+            "non_silent": True,
+            "clipping_status": "PASS",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache_dir = root / "cache"
+            cache_dir.mkdir()
+            key = tts_cache_key(
+                "fixture",
+                voice=DEFAULT_VOICE,
+                rate=DEFAULT_RATE,
+                pitch=DEFAULT_PITCH,
+                volume=DEFAULT_VOLUME,
+            )
+            (cache_dir / f"{key}.mp3").write_bytes(b"cached-audio")
+            target = root / "out.mp3"
+            with patch("lstest.scripts.audio_synthesis.inspect_edge_tts_mp3", return_value=metadata):
+                payload = synthesize_edge_tts(
+                    "fixture",
+                    target,
+                    cache_dir=cache_dir,
+                    voice=DEFAULT_VOICE,
+                    rate=DEFAULT_RATE,
+                    pitch=DEFAULT_PITCH,
+                    volume=DEFAULT_VOLUME,
+                )
+            self.assertTrue(payload["cache_hit"])
+            self.assertEqual(target.read_bytes(), b"cached-audio")
 
 
 if __name__ == "__main__":

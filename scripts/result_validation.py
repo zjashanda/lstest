@@ -7,7 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 try:
     from .case_contract import CaseContractError, assert_case_contract
@@ -21,7 +21,14 @@ RESULT_STATUSES = frozenset(
     {"PASS", "FAIL", "BLOCKED", "PARTIAL", "AMBIGUOUS", "SKIPPED", "STOPPED", "EXPECTED", "ABORTED"}
 )
 ALLOWED_TOP_LEVEL = frozenset({"serial_logs", "tool.log", "results.csv", "cases.csv", "STOP"})
+CASE_REQUIRED_COLUMNS = frozenset({"case_id", "scenario", "input_text", "audio_file", "case_contract"})
+RESULT_REQUIRED_COLUMNS = frozenset({"case_id", "final_status", "facts_json", "evidence", "primary_reason"})
 RESULT_LINE_RE = re.compile(r"\[RESULT\].*?(?:本轮|result)\s*=\s*([A-Z_]+)", re.IGNORECASE)
+
+
+def _read_header(path: Path) -> tuple[str, ...]:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return tuple(next(csv.reader(handle), ()))
 
 
 @dataclass(frozen=True)
@@ -87,7 +94,13 @@ def _validate_evidence(run_dir: Path, evidence: str, issues: list[ResultIssue], 
                 issues.append(ResultIssue("RESULT_EVIDENCE_CURSOR_INVALID", f"cursor {cursor} exceeds {line_count} lines: {ref}", "evidence", case_id))
 
 
-def validate_run_dir(run_dir: Path | str) -> dict[str, Any]:
+def validate_run_dir(
+    run_dir: Path | str,
+    *,
+    requirement_ids: Iterable[str] | None = None,
+    capability_ids: Iterable[str] | None = None,
+    corpus_ids: Iterable[str] | None = None,
+) -> dict[str, Any]:
     """Validate the four lstest artifacts without modifying the run directory."""
     root = Path(run_dir).resolve()
     issues: list[ResultIssue] = []
@@ -105,6 +118,18 @@ def validate_run_dir(run_dir: Path | str) -> dict[str, Any]:
 
     if issues:
         return {"status": "BLOCKED", "issues": [issue.to_dict() for issue in issues], "run_dir": str(root)}
+
+    try:
+        case_header = _read_header(root / "cases.csv")
+        result_header = _read_header(root / "results.csv")
+    except OSError as error:
+        issues.append(ResultIssue("RESULT_CSV_INVALID", f"CSV header: {error}", "csv"))
+        case_header = ()
+        result_header = ()
+    for name in sorted(CASE_REQUIRED_COLUMNS - set(case_header)):
+        issues.append(ResultIssue("RESULT_HEADER_MISSING", f"cases.csv missing column: {name}", "cases.csv"))
+    for name in sorted(RESULT_REQUIRED_COLUMNS - set(result_header)):
+        issues.append(ResultIssue("RESULT_HEADER_MISSING", f"results.csv missing column: {name}", "results.csv"))
 
     try:
         cases = _read_csv(root / "cases.csv")
@@ -183,6 +208,9 @@ def validate_run_dir(run_dir: Path | str) -> dict[str, Any]:
                     contract,
                     case_id=case_id,
                     known_case_ids=case_ids,
+                    known_requirement_ids=requirement_ids,
+                    capability_ids=capability_ids,
+                    corpus_ids=corpus_ids,
                 )
             except (CaseContractError, ValueError) as error:
                 issues.append(ResultIssue("RESULT_CASE_CONTRACT_INVALID", str(error), "case_contract", case_id))
@@ -219,6 +247,14 @@ def validate_run_dir(run_dir: Path | str) -> dict[str, Any]:
                 "tool.log",
             ))
 
+    stop_requested = (root / "STOP").exists()
+    if stop_requested and not any(status in {"STOPPED", "ABORTED"} for status in result_status_counts):
+        issues.append(ResultIssue(
+            "RESULT_STOP_WITHOUT_STOPPED",
+            "STOP exists but results.csv has no STOPPED/ABORTED case",
+            "STOP",
+        ))
+
     status = "PASS" if not issues else "FAIL"
     return {
         "status": status,
@@ -229,4 +265,5 @@ def validate_run_dir(run_dir: Path | str) -> dict[str, Any]:
         "missing_results": missing_results,
         "result_status_counts": dict(sorted(result_status_counts.items())),
         "tool_result_status_counts": dict(sorted(tool_status_counts.items())),
+        "stop_requested": stop_requested,
     }
