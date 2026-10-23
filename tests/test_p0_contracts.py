@@ -289,6 +289,20 @@ class ManifestTests(unittest.TestCase):
                 ])
             self.assertEqual(code, 0, output.getvalue())
 
+    def test_preflight_require_base_facts_reports_gaps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "profile.json"
+            profile.write_text(json.dumps({"schema_version": 1, "profile_id": "fixture"}), encoding="utf-8")
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main([
+                    "preflight",
+                    "--profile", str(profile),
+                    "--require-base-facts",
+                ])
+            self.assertEqual(code, 3)
+            self.assertIn("base_fact_gaps", output.getvalue())
+
 
 class ResultValidationTests(unittest.TestCase):
     def _valid_run(self) -> tuple[tempfile.TemporaryDirectory, Path]:

@@ -139,6 +139,7 @@ def parser() -> argparse.ArgumentParser:
     pre.add_argument("--cases", type=Path)
     pre.add_argument("--requirements", type=Path)
     pre.add_argument("--corpus", type=Path)
+    pre.add_argument("--require-base-facts", action="store_true")
     pre.add_argument("--port", action="append", default=[])
     pre.add_argument("--baudrate", type=int, default=0)
     pre.add_argument("--playback-device-key")
@@ -313,6 +314,16 @@ def main(argv: list[str] | None = None) -> int:
                     }, ensure_ascii=False, indent=2))
                     return 3
                 case_count = len(cases)
+            base_fact_gaps = profile.base_fact_gaps()
+            if (profile.base_facts_required or getattr(args, "require_base_facts", False)) and base_fact_gaps:
+                print(json.dumps({
+                    "status": "BLOCKED",
+                    "profile_id": profile.profile_id,
+                    "profile_sha256": profile.sha256,
+                    "connection": connection.to_dict(),
+                    "base_fact_gaps": base_fact_gaps,
+                }, ensure_ascii=False, indent=2))
+                return 3
             if specs:
                 capability_payload = probe_capabilities(specs)
                 if capability_payload["status"] == "BLOCKED":
@@ -338,6 +349,8 @@ def main(argv: list[str] | None = None) -> int:
                 payload["requirements"] = sorted(requirement_ids)
             if corpus_ids is not None:
                 payload["corpora"] = sorted(corpus_ids)
+            payload["base_fact_gaps"] = base_fact_gaps
+            payload["base_fact_coverage"] = "PASS" if not base_fact_gaps else "PARTIAL"
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
         summary = run_smoke(connection, args.profile, hardware=args.hardware)

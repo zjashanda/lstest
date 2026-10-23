@@ -19,6 +19,11 @@ try:
 except ImportError:  # direct execution fallback
     from case_contract import CaseContractError, NormalizedCaseContract, normalize_case_contract  # type: ignore
 
+try:
+    from .base_facts import missing_base_fact_events
+except ImportError:  # direct execution fallback
+    from base_facts import missing_base_fact_events  # type: ignore
+
 
 class ProfileError(ValueError):
     pass
@@ -35,6 +40,9 @@ EVENT_REGISTRY: Mapping[str, Mapping[str, str]] = {
     "online_intent": {"key": "ONLINE_INTENT", "tag": "ONLINE", "label": "在线意图"},
     "player_url": {"key": "PLAY_URL", "tag": "PLAYER", "label": "播放地址"},
     "player_id": {"key": "DEVICE_BROADCAST_ID", "tag": "PLAYER", "label": "设备播报"},
+    "tts_offline": {"key": "TTS_OFFLINE", "tag": "PLAYER", "label": "离线TTS"},
+    "tts_online": {"key": "TTS_ONLINE", "tag": "PLAYER", "label": "在线TTS"},
+    "tts_id": {"key": "TTS_ID", "tag": "PLAYER", "label": "TTS ID"},
     "player_state": {"key": "PLAYER", "tag": "PLAYER", "label": "播放器"},
     "player_control_action": {"key": "PLAYER_CONTROL", "tag": "PLAYER", "label": "播放控制"},
     "initialization_ready": {"key": "INIT_READY", "tag": "SYSTEM", "label": "初始化"},
@@ -573,6 +581,45 @@ class DeviceProfile:
     def safety_stop(self) -> list[Mapping[str, Any]]:
         return [dict(item) for item in self.payload.get("safety_stop", []) if isinstance(item, Mapping)]
 
+    @property
+    def base_facts_required(self) -> bool:
+        return bool(self.payload.get("base_facts_required", False))
+
+    @property
+    def base_fact_event_map(self) -> Mapping[str, str]:
+        value = self.payload.get("base_fact_event_map", {})
+        if not isinstance(value, Mapping):
+            raise ProfileError("base_fact_event_map must be an object")
+        return {str(key): str(item) for key, item in value.items()}
+
+    @property
+    def base_facts_not_applicable(self) -> tuple[str, ...]:
+        value = self.payload.get("base_facts_not_applicable", [])
+        if value is None:
+            return ()
+        if not isinstance(value, (list, tuple, set)):
+            raise ProfileError("base_facts_not_applicable must be a list")
+        return tuple(str(item) for item in value)
+
+    def base_fact_gaps(self) -> list[str]:
+        gaps = missing_base_fact_events(
+            {str(rule.get("event_type")) for rule in self.event_rules},
+            not_applicable=self.base_facts_not_applicable,
+            event_map=self.base_fact_event_map,
+        )
+        if "player_state" not in self.base_facts_not_applicable:
+            player_rules = [rule for rule in self.event_rules if rule.get("event_type") == "player_state"]
+            if player_rules and any(str(rule.get("render_policy") or "all").lower() != "all" for rule in player_rules):
+                gaps.append("player_state_render_policy")
+        return gaps
+
+    def assert_base_facts_ready(self) -> None:
+        if not self.base_facts_required:
+            return
+        gaps = self.base_fact_gaps()
+        if gaps:
+            raise ProfileError("BLOCKED_PROFILE_CONTRACT missing base interaction facts: " + ", ".join(gaps))
+
     def assert_formal_ready(self, required_event_types: Iterable[str] = ()) -> None:
         """Reject a formal run before actions when its evidence contract is incomplete."""
         if not self.is_formal:
@@ -581,6 +628,7 @@ class DeviceProfile:
         missing = {str(item) for item in required_event_types if str(item)} - available
         if missing:
             raise ProfileError(f"BLOCKED_PROFILE_CONTRACT missing event rules: {', '.join(sorted(missing))}")
+        self.assert_base_facts_ready()
         ProfileFixtureRunner(self).assert_valid()
 
     def normalized_case_contract(self, metadata: Mapping[str, Any], *, case_id: str = "") -> NormalizedCaseContract:
