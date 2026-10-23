@@ -54,3 +54,9 @@ python -u lstest/scripts/lstest.py audio scan --direction Render --json
 - [references/result-log-standard.md](references/result-log-standard.md)
 - [references/project-adaptation-standard.md](references/project-adaptation-standard.md)
 - [references/acceptance.md](references/acceptance.md)
+
+## 压测前环境清理与串口恢复
+
+- `scripts/environment_cleanup.py`：清空音频锁目录、清理残留播放进程、删除过期临时音频、统计未使用/缺失的声卡端点。
+- `scripts/serial_recovery.py`：通用串口断开重连工具，多次关闭/重开串口并用 probe 检查提示符恢复。
+- 项目适配层应在压测启动前调用清理，并在控制口/CSK 口无响应时调用重连；只有全部重连失败才标记基础设施异常。
