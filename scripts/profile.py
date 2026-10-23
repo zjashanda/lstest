@@ -340,6 +340,7 @@ class DeviceProfile:
         if formal and not rules:
             raise ProfileError("formal profile requires event_rules")
         ids: set[str] = set()
+        rule_signatures: dict[str, str] = {}
         for index, rule in enumerate(rules):
             location = f"event_rules[{index}]"
             if not isinstance(rule, Mapping):
@@ -393,6 +394,17 @@ class DeviceProfile:
             stage = str(rule.get("stage") or "").strip()
             if formal and not stage:
                 raise ProfileError(f"{location} formal rule requires stage")
+            signature = json.dumps(
+                {"event_type": event_type, "pattern": pattern, "sources": source, "stage": stage},
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+            if signature in rule_signatures:
+                raise ProfileError(
+                    f"{location} duplicates event rule pattern of {rule_signatures[signature]}"
+                )
+            rule_signatures[signature] = rule_id
             correlation = rule.get("correlation", {})
             if correlation and not isinstance(correlation, Mapping):
                 raise ProfileError(f"{location}.correlation must be an object")
