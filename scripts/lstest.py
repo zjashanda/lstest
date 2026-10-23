@@ -119,6 +119,13 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="以 0 退出码返回 BLOCKED，便于人工审核后继续流水线",
     )
+    result_cleanup = result_sub.add_parser(
+        "cleanup",
+        help="手动清理结果目录中的非串口数据，保留 serial_logs/",
+    )
+    result_cleanup.add_argument("run_dir", type=Path)
+    result_cleanup.add_argument("--confirm", action="store_true")
+    result_cleanup.add_argument("--dry-run", action="store_true")
 
     pre.add_argument("--profile", type=Path, required=True)
     pre.add_argument("--capabilities", type=Path)
@@ -177,6 +184,29 @@ def run_audio_tool(args: argparse.Namespace) -> int:
     return completed.returncode
 
 
+def run_cleanup_command(args: argparse.Namespace) -> int:
+    """Manually remove non-serial artifacts; never touch serial logs."""
+    root = args.run_dir.resolve()
+    if not root.is_dir():
+        raise ValueError(f"result directory does not exist: {root}")
+    if not (root / "serial_logs").is_dir():
+        raise ValueError(f"refusing cleanup outside an lstest run directory: {root}")
+    targets = [root / name for name in ("tool.log", "results.csv", "cases.csv") if (root / name).is_file()]
+    if not targets:
+        print(f"nothing to clean: {root}")
+        return 0
+    for path in targets:
+        print(f"remove: {path}")
+    if args.dry_run or not args.confirm:
+        if not args.confirm:
+            print("refusing to delete without --confirm")
+        return 0 if args.dry_run else 2
+    for path in targets:
+        path.unlink()
+    print(f"cleaned non-serial artifacts; serial_logs left untouched: {root}")
+    return 0
+
+
 def run_result_command(args: argparse.Namespace) -> int:
     if args.result_command != "validate":
         raise ValueError(f"unsupported result command: {args.result_command}")
@@ -209,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2) if args.json else "\n".join(payload["capabilities"]))
         return 0
     if args.command == "result":
+        if args.result_command == "cleanup":
+            return run_cleanup_command(args)
         return run_result_command(args)
     try:
         if args.command == "tts":
