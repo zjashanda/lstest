@@ -17,11 +17,11 @@ from typing import Any, Iterable, Mapping, Protocol, Sequence
 try:
     from .observations import RawTag, ToolJudgement, raw_tags_from_mappings, render_observation
     from .timeline import TimelineLedger, ToolLogValidator, safe_basename
-    from .verdict import verdict_from_status
+    from .verdict import validate_verdict_payload, verdict_from_status
 except ImportError:  # direct execution fallback
     from observations import RawTag, ToolJudgement, raw_tags_from_mappings, render_observation
     from timeline import TimelineLedger, ToolLogValidator, safe_basename
-    from verdict import verdict_from_status  # type: ignore
+    from verdict import validate_verdict_payload, verdict_from_status  # type: ignore
 
 BEIJING = timezone(timedelta(hours=8))
 STICKY_FATAL_MARKERS = {
@@ -1343,11 +1343,23 @@ class TaskArtifacts:
         lstest_meta = facts.get("_lstest")
         if not isinstance(lstest_meta, Mapping):
             lstest_meta = {}
-        if not isinstance(lstest_meta.get("verdict"), Mapping):
+        provided_verdict = lstest_meta.get("verdict")
+        if isinstance(provided_verdict, Mapping):
+            verdict_issues = validate_verdict_payload(provided_verdict)
+            if verdict_issues:
+                anomaly_codes.append("VERDICT_INVALID")
+                verdict = verdict_from_status(status, timeline_result.get("reason", result.reason), anomaly_codes=anomaly_codes)
+                lstest_meta = {
+                    **lstest_meta,
+                    "schema_version": 1,
+                    "verdict": verdict.to_dict(),
+                    "verdict_issues": [issue.to_dict() for issue in verdict_issues],
+                }
+            else:
+                lstest_meta = {**lstest_meta, "schema_version": int(lstest_meta.get("schema_version", 1) or 1)}
+        else:
             verdict = verdict_from_status(status, timeline_result.get("reason", result.reason), anomaly_codes=anomaly_codes)
             lstest_meta = {**lstest_meta, "schema_version": 1, "verdict": verdict.to_dict()}
-        else:
-            lstest_meta = {**lstest_meta, "schema_version": int(lstest_meta.get("schema_version", 1) or 1)}
         facts["_lstest"] = dict(lstest_meta)
         profile_version = self._case_metadata.get(result.case_id, {}).get("profile_version", "")
         profile_sha256 = self._case_metadata.get(result.case_id, {}).get("profile_sha256", "")
