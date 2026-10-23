@@ -60,3 +60,30 @@ python -u lstest/scripts/lstest.py audio scan --direction Render --json
 - `scripts/environment_cleanup.py`：清空音频锁目录、清理残留播放进程、删除过期临时音频、统计未使用/缺失的声卡端点。
 - `scripts/serial_recovery.py`：通用串口断开重连工具，多次关闭/重开串口并用 probe 检查提示符恢复。
 - 项目适配层应在压测启动前调用清理，并在控制口/CSK 口无响应时调用重连；只有全部重连失败才标记基础设施异常。
+
+## 单轮交互结果与验收模式
+
+单轮交互结果统一为：
+
+- `hit`：唤醒成功 + 识别正确
+- `misheard`：唤醒成功 + 误识别
+- `empty`：唤醒成功 + 无识别结果
+- `asleep`：未唤醒
+
+`interaction_acceptance` 提供可选验收模式（单轮交互判定）：
+
+- `wake_only`：只看唤醒成功
+- `wake_playback`：唤醒 + 至少 1 次完整唤醒播报
+- `strict`：只接受 `hit`
+- `strict_playback`：只接受 `hit`，并要求唤醒播报、识别响应和识别播报
+- `any_asr`：接受 `hit`、`misheard`
+- `any_asr_playback`：接受 `hit`、`misheard`，并要求唤醒播报、识别响应和识别播报
+- `asr_optional`：单轮接受 `hit`、`misheard`、`empty`，整轮任务至少要有一次 `hit`/`misheard`
+- `asr_optional_playback`：同 `asr_optional`，有识别结果的轮次还要求识别响应和识别播报
+
+播报维度：
+
+- 唤醒播报默认至少 1 次，并要求完整状态切换
+- 识别响应至少 1 次（`offline_tts_callback` / `soundplayer`）
+- 识别播报允许 1 次或多次，每次要求 PLAYING → COMPLETE 或 start → stop
+- `asr_optional` 的“整轮至少一次非空”是任务级约束，不属于单轮结果
