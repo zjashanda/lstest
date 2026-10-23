@@ -28,6 +28,7 @@
 - `scripts/install_laid_windows.ps1`
 - `scripts/listenai_play.py`
 - `scripts/lstest.py`
+- `scripts/manifests.py`
 - `scripts/observations.py`
 - `scripts/playback.py`
 - `scripts/profile.py`
@@ -85,6 +86,7 @@ Then restart Codex.
 ## 音频与设备
 
 - `tts` 与 `tts-manifest` 使用 `edge-tts` 合成并校验 MP3、24 kHz、单声道、时长、响度和 SHA-256。
+- `--cache-dir` 可按文本、voice、rate、pitch、volume 缓存已校验 MP3，避免重复网络合成。
 - 未指定声卡时使用系统默认 Render；指定稳定设备 key 时严格使用该设备，失败不回退。
 - FFmpeg 只用于音频归一化，Windows 实际播放使用 `pygame`/DirectSound，Linux 使用 `aplay`。
 
@@ -95,8 +97,9 @@ python -u lstest/scripts/lstest.py --help
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json>
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --capabilities <capabilities.json>
 python -u lstest/scripts/lstest.py result validate <run-dir> --json
+python -u lstest/scripts/lstest.py result validate <run-dir> --requirements <requirements.json> --corpus <corpus.json> --capabilities <capabilities.json>
 python -u lstest/scripts/lstest.py result cleanup <run-dir> --confirm
-python -u lstest/scripts/lstest.py tts --text-file utterance.txt --output audio/sample.mp3
+python -u lstest/scripts/lstest.py tts --text-file utterance.txt --output audio/sample.mp3 --cache-dir .cache/tts
 python -u lstest/scripts/lstest.py audio scan --direction Render --json
 ```
 
