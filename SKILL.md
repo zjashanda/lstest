@@ -87,6 +87,7 @@ python -u lstest/scripts/lstest.py audio scan --direction Render --json
 - 不要用 `list(csv.DictReader(...))` 全量加载 `results.csv`；长时间压测时单行可能很大，必须使用 `scripts/result_stats.py` 的 `ResultSummary` 增量读取，只解析上次位置之后的新增行。
 - 多设备实时汇总应复用 `ResultSummary` 缓存；最终统计也复用缓存，避免反复全量扫描 `results.csv`。
 - 启动子进程后调用 `environment_cleanup.register_process_cleanup(...)`，异常退出时自动终止子进程树；单个 PID 可使用 `environment_cleanup.kill_process_tree(pid)`，避免残留压测和播放进程。
+- 需要防止父进程被关闭或强制退出后遗留子进程时，创建 `environment_cleanup.KillOnCloseJob()` 并对每个 Popen 调用 `assign()`；Windows Job Object 会在父进程句柄关闭时终止整棵子进程树。
 
 ## 单轮交互结果与验收模式
 
