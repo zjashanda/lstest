@@ -9,6 +9,7 @@ import importlib.metadata
 import json
 import os
 import re
+import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -126,6 +127,22 @@ def edge_tts_version() -> str:
         return "unknown"
 
 
+def tts_cache_key(
+    text: str,
+    *,
+    voice: str,
+    rate: str,
+    pitch: str,
+    volume: str,
+) -> str:
+    payload = json.dumps(
+        [text.strip(), voice, rate, pitch, volume, edge_tts_version()],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def synthesize_edge_tts(
     text: str,
     output: Path,
@@ -137,6 +154,7 @@ def synthesize_edge_tts(
     volume: str = DEFAULT_VOLUME,
     timeout_s: float = 60.0,
     retries: int = 1,
+    cache_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Generate one validated Edge TTS MP3; retry transient synthesis failures once by default."""
     normalized_text = (text or "").strip()
@@ -150,6 +168,43 @@ def synthesize_edge_tts(
         raise ValueError("retries must be >= 0")
 
     output.parent.mkdir(parents=True, exist_ok=True)
+    cache_path: Path | None = None
+    if cache_dir is not None:
+        cache_dir = Path(cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_dir / f"{tts_cache_key(normalized_text, voice=voice, rate=rate, pitch=pitch, volume=volume)}.mp3"
+        if cache_path.is_file():
+            try:
+                metadata = inspect_edge_tts_mp3(cache_path)
+                if output.resolve() != cache_path.resolve():
+                    shutil.copyfile(cache_path, output)
+                return {
+                    "case_id": case_id,
+                    "text": normalized_text,
+                    "audio_path": str(output),
+                    "provider": "microsoft_edge_tts",
+                    "model": "not_exposed_by_provider",
+                    "voice": voice,
+                    "rate": rate,
+                    "pitch": pitch,
+                    "volume": volume,
+                    **{name: metadata[name] for name in ("container", "codec", "sample_rate", "channels", "duration_seconds")},
+                    "size_bytes": output.stat().st_size,
+                    "mean_volume_db": metadata["mean_volume_db"],
+                    "peak_volume_db": metadata["peak_volume_db"],
+                    "non_silent": "true",
+                    "clipping_status": "PASS" if metadata["peak_volume_db"] <= -0.1 else "WARN_NEAR_ZERO_DBFS",
+                    "sha256": sha256_file(output),
+                    "generated_at": now_iso(),
+                    "tool": "edge-tts",
+                    "tool_version": edge_tts_version(),
+                    "validation_status": "PASS",
+                    "error": "",
+                    "cache_hit": True,
+                }
+            except Exception:
+                pass
+
     temporary = output.with_suffix(output.suffix + ".part")
     failure: Exception | None = None
     for attempt in range(1, retries + 2):
@@ -168,6 +223,8 @@ def synthesize_edge_tts(
             )
             metadata = inspect_edge_tts_mp3(temporary)
             os.replace(temporary, output)
+            if cache_path is not None and output.resolve() != cache_path.resolve():
+                shutil.copyfile(output, cache_path)
             return {
                 "case_id": case_id,
                 "text": normalized_text,
@@ -190,6 +247,7 @@ def synthesize_edge_tts(
                 "tool_version": edge_tts_version(),
                 "validation_status": "PASS",
                 "error": "",
+                "cache_hit": False,
             }
         except Exception as error:
             failure = error
@@ -258,6 +316,7 @@ def synthesize_manifest(
     volume: str = DEFAULT_VOLUME,
     timeout_s: float = 60.0,
     retries: int = 1,
+    cache_dir: Path | None = None,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, Any]] = []
@@ -270,6 +329,7 @@ def synthesize_manifest(
                 synthesize_edge_tts(
                     text, target, case_id=case_id, voice=voice, rate=rate, pitch=pitch,
                     volume=volume, timeout_s=timeout_s, retries=retries,
+                    cache_dir=cache_dir,
                 )
             )
         except Exception as error:
