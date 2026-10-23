@@ -36,6 +36,7 @@
 - `SKILL.md`
 - `tests/__init__.py`
 - `tests/test_foundation.py`
+- `tests/test_environment_cleanup.py`
 - `tests/test_profile_driven.py`
 - `tests/test_result_stats.py`
 
