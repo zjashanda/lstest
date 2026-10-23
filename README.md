@@ -6,8 +6,11 @@
 
 - `agents/openai.yaml`
 - `config/profile.example.json`
+- `config/capabilities.example.json`
 - `config/requirements.txt`
 - `references/acceptance.md`
+- `references/case-contract.md`
+- `references/verdict-policy.md`
 - `references/profile-driven-log-discovery.md`
 - `references/profile-driven-migration.md`
 - `references/profile-schema.md`
@@ -18,6 +21,8 @@
 - `scripts/__init__.py`
 - `scripts/adapter_guard.py`
 - `scripts/audio_synthesis.py`
+- `scripts/capabilities.py`
+- `scripts/case_contract.py`
 - `scripts/core.py`
 - `scripts/install_laid_linux.sh`
 - `scripts/install_laid_windows.ps1`
@@ -32,9 +37,12 @@
 - `scripts/smoke.py`
 - `scripts/timeline.py`
 - `scripts/timing.py`
+- `scripts/result_validation.py`
+- `scripts/verdict.py`
 - `SKILL.md`
 - `tests/__init__.py`
 - `tests/test_foundation.py`
+- `tests/test_p0_contracts.py`
 - `tests/test_profile_driven.py`
 
 ## Install the skill
@@ -85,12 +93,16 @@ Then restart Codex.
 ```powershell
 python -u lstest/scripts/lstest.py --help
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json>
+python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --capabilities <capabilities.json>
+python -u lstest/scripts/lstest.py result validate <run-dir> --json
 python -u lstest/scripts/lstest.py tts --text-file utterance.txt --output audio/sample.mp3
 python -u lstest/scripts/lstest.py audio scan --direction Render --json
 ```
 
 详细合同和可复制的项目适配模板见：
 
+- [references/case-contract.md](references/case-contract.md)
+- [references/verdict-policy.md](references/verdict-policy.md)
 - [references/profile-driven-log-discovery.md](references/profile-driven-log-discovery.md)
 - [references/profile-driven-migration.md](references/profile-driven-migration.md)
 - [references/profile-schema.md](references/profile-schema.md)

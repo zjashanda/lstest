@@ -24,6 +24,15 @@ description: 面向新设备项目的通用测试验证与压测框架，提供�
 - 结果目录仅保留 `serial_logs/*.log`、`tool.log`、`results.csv`、`cases.csv`。禁止 `.bin`、`task.log`、`tool_logs`、JSONL 和临时结果文件。
 - 固定语料在首个设备动作前调用 `freeze_cases()`；随机长压先调用 `begin_lazy_cases()` 冻结场景、种子和 profile 身份，再于每轮动作前调用 `declare_case()`。未声明的 case 不得播放或发送设备命令。
 
+## Case Contract 与 Verdict（P0）
+
+- `case_contract` 仍保存在 `cases.csv` 同一列：旧项目可继续只写 `metadata["timeline"]`；新项目可写 `metadata["case_contract"]`，其中 `timeline` 保持原语义，`lstest` 承载 requirement、依赖、能力、判定层、证据和时序。
+- 能力清单是可选的独立 `capabilities.json`；`preflight --capabilities` 对必需能力做只读探测，缺失时返回 `BLOCKED`，不打开正式设备动作。
+- 每轮 `results.csv` 的 `facts_json` 自动写入 `_lstest.schema_version=1` 和 `_lstest.verdict`；`final_status` 与 verdict 状态冲突时结果校验失败。
+- `result validate` 只读校验四个结果产物、CSV 行数、证据游标、case contract 和 verdict，不修改结果目录。
+- 自定义判定层和 `--allow-blocked` 属于后续版本，P0 不默认放行阻塞。
+
+
 ## 异常与停止
 
 每个动作、回调和 case 都必须捕获异常，记录证据、完成当前轮收尾并继续下一可执行轮。初始化/日志等级重试耗尽、识别失败、超时、重复结果、播放器失败、设备业务错误和单条解析异常都不是任务自动退出理由。
@@ -41,12 +50,16 @@ description: 面向新设备项目的通用测试验证与压测框架，提供�
 ```powershell
 python -u lstest/scripts/lstest.py --help
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json>
+python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --capabilities <capabilities.json>
+python -u lstest/scripts/lstest.py result validate <run-dir> --json
 python -u lstest/scripts/lstest.py tts --text-file utterance.txt --output audio/sample.mp3
 python -u lstest/scripts/lstest.py audio scan --direction Render --json
 ```
 
 详细合同和可复制的项目适配模板见：
 
+- [references/case-contract.md](references/case-contract.md)
+- [references/verdict-policy.md](references/verdict-policy.md)
 - [references/profile-driven-log-discovery.md](references/profile-driven-log-discovery.md)
 - [references/profile-driven-migration.md](references/profile-driven-migration.md)
 - [references/profile-schema.md](references/profile-schema.md)
