@@ -87,3 +87,9 @@ python -u lstest/scripts/lstest.py audio scan --direction Render --json
 - 识别响应至少 1 次（`offline_tts_callback` / `soundplayer`）
 - 识别播报允许 1 次或多次，每次要求 PLAYING → COMPLETE 或 start → stop
 - `asr_optional` 的“整轮至少一次非空”是任务级约束，不属于单轮结果
+
+多结果异常：
+
+- 单轮内所有唤醒结果记录到 `wake_results`，所有识别结果记录到 `asr_results`，并统计 `wake_result_count` / `asr_result_count`
+- 一次播放出现多个唤醒结果或多个识别结果时，记录 `MULTI_WAKE` / `MULTI_ASR` / `MULTI_RESULT`
+- `strict` / `strict_playback` 遇到多结果直接 FAIL；其他模式只记录异常，不影响本轮通过
