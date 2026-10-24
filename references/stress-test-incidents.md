@@ -12,6 +12,15 @@
   - 使用 `environment_cleanup.register_process_cleanup(...)` 处理 Python 异常退出场景。
 - 验证：修复后单台 1 轮 PASS；500 轮验证任务已启动。
 
+## 2026-10-24：4 × 500 轮多 ASR 被误判为失败
+
+- 任务：4 台设备 × 500 轮，模式 `powercycle + wake/ASR`，验收模式 `any_asr`。
+- 结果：2000 轮全部完成；dev01 为 500 PASS，dev02 为 499 PASS/1 FAIL，dev03 为 499 PASS/1 FAIL，dev05 为 498 PASS/2 FAIL。
+- 失败轮次均满足：`asr_result_count=2`、`multi_result=True`，所有 required checks（含 `interaction_acceptance`）均为 PASS；但 timeline 的 `MULTI_ASR` 异常把最终状态判为 FAIL。
+- 根因：`run.py` 对所有验收模式都无条件调用 `record_anomaly("MULTI_ASR")`；timeline 把该异常视为失败。实际规则是只有 `strict` / `strict_playback` 因多结果失败，其他模式只记录。
+- 修复：新增 `interaction_acceptance.rejects_multi_result(mode)`；仅严格模式记录致命异常，非严格模式把 `MULTI_ASR` 写入 `anomaly_codes` 但不影响 PASS。已补单元测试。
+- 后续：按 4 台重新执行长轮次验证；dev04 因 COM11 控制口异常暂时排除。
+
 ## 2026-10-23：5 万轮任务统计 MemoryError
 
 - 任务：`20261023_123222`，5 台设备 × 10000 轮，模式 `powercycle + wake/ASR`。
