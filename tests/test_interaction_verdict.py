@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from lstest.scripts.interaction_acceptance import MODES, round_verdict, run_verdict
+from lstest.scripts.interaction_acceptance import (
+    MODES,
+    rejects_multi_result,
+    round_verdict,
+    run_verdict,
+)
 from lstest.scripts.verdict import VerdictStatus
 
 
@@ -49,6 +54,12 @@ class InteractionVerdictTests(unittest.TestCase):
         verdict = round_verdict("hit", "strict", multi_result=True)
         self.assertIs(verdict.status, VerdictStatus.FAIL)
         self.assertIn("MULTI_RESULT", verdict.anomaly_codes)
+
+    def test_only_strict_modes_reject_multi_result(self):
+        self.assertFalse(rejects_multi_result("any_asr"))
+        self.assertFalse(rejects_multi_result("asr_optional"))
+        self.assertTrue(rejects_multi_result("strict"))
+        self.assertTrue(rejects_multi_result("strict_playback"))
 
     def test_missing_wake_playback_is_reported(self):
         verdict = round_verdict("hit", "wake_playback")
