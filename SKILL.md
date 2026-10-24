@@ -89,6 +89,7 @@ python -u lstest/scripts/lstest.py audio scan --direction Render --json
 - 启动子进程后调用 `environment_cleanup.register_process_cleanup(...)`，异常退出时自动终止子进程树；单个 PID 可使用 `environment_cleanup.kill_process_tree(pid)`，避免残留压测和播放进程。
 - 压测启动前先用 `environment_cleanup.find_processes_by_command(...)` 检测活动的 `run.py` / `run_multi.py`；存在活动任务时必须拒绝清理和启动，避免误杀其他正在运行的压测。
 - 需要防止父进程被关闭或强制退出后遗留子进程时，创建 `environment_cleanup.KillOnCloseJob()` 并对每个 Popen 调用 `assign()`；Windows Job Object 会在父进程句柄关闭时终止整棵子进程树。
+- 历史故障复盘见 [references/stress-test-incidents.md](references/stress-test-incidents.md)。
 
 ## 单轮交互结果与验收模式
 
