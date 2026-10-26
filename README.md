@@ -17,6 +17,7 @@
 - `references/profile-schema.md`
 - `references/project-adaptation-standard.md`
 - `references/project-adapter-template.md`
+- `references/long-run-stability.md`
 - `references/result-log-standard.md`
 - `references/scenario-api.md`
 - `scripts/__init__.py`
@@ -47,6 +48,7 @@
 - `tests/__init__.py`
 - `tests/test_foundation.py`
 - `tests/test_environment_cleanup.py`
+- `tests/test_long_run_cleanup.py`
 - `tests/test_p0_contracts.py`
 - `tests/test_profile_driven.py`
 - `tests/test_result_stats.py`

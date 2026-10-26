@@ -91,6 +91,15 @@ python -u lstest/scripts/lstest.py audio scan --direction Render --json
 - 需要防止父进程被关闭或强制退出后遗留子进程时，创建 `environment_cleanup.KillOnCloseJob()` 并对每个 Popen 调用 `assign()`；Windows Job Object 会在父进程句柄关闭时终止整棵子进程树。
 - 历史故障复盘见 [references/stress-test-incidents.md](references/stress-test-incidents.md)。
 
+## 串口与内存处理硬性约束
+
+- 串口原始行只追加到 `serial_logs/*.log`；禁止在内存中永久保留全量行列表。需要按游标查询时，使用每端口有界事实缓存（最多 20,000 条）并保存绝对游标基准。
+- parser 单行缓冲必须有上限（建议 4MiB）；无换行或超长输入必须丢弃当前缓冲并记录错误码，不能无限增长。
+- 禁止 `list(csv.DictReader(...))` 全量加载 `results.csv`；使用 `scripts/result_stats.py::ResultSummary`。
+- 最终对账必须流式逐行处理；`tool.log` 必须使用 `ToolLogValidator.validate_path(...)` 流式校验，禁止对增长中的文件调用 `read_text()`。
+- case 关闭后必须释放 facts/anomalies/window/attempts/online/player/metadata/position；使用框架提供的清理路径，不在项目适配器里新建无限 per-case 容器。
+- 详细规范和回归要求见 [references/long-run-stability.md](references/long-run-stability.md)。
+
 ## 单轮交互结果与验收模式
 
 单轮交互结果统一为：
