@@ -1393,6 +1393,8 @@ class TaskArtifacts:
             self._writer.writerow({name: self._csv_value(value) for name, value in row.items()})
             self._csv.flush()
         self._record_round_exception_summary(result.case_id, status)
+        self._case_metadata.pop(result.case_id, None)
+        self._case_positions.pop(result.case_id, None)
 
     def _record_round_exception_summary(self, case_id: str, status: str) -> None:
         """Print and persist the cumulative, task-level exception snapshot."""
@@ -1495,26 +1497,28 @@ class TaskArtifacts:
         with self._lock:
             self._csv.flush()
         counts: dict[str, int] = {}
-        rows: list[dict[str, str]] = []
+        row_count = 0
+        first_failure: dict[str, str] | None = None
         previous_field_limit = csv.field_size_limit()
         if previous_field_limit < RESULT_CSV_FIELD_LIMIT:
             csv.field_size_limit(RESULT_CSV_FIELD_LIMIT)
         with self.results_path.open("r", encoding="utf-8-sig", newline="") as handle:
             try:
                 for row in csv.DictReader(handle):
-                    rows.append(row)
+                    row_count += 1
                     state = str(row.get("final_status") or "").upper()
                     if state:
                         counts[state] = counts.get(state, 0) + 1
+                    if first_failure is None and state not in NORMAL_CASE_STATUSES:
+                        first_failure = row
             finally:
                 if previous_field_limit < RESULT_CSV_FIELD_LIMIT:
                     csv.field_size_limit(previous_field_limit)
         invalid = sum(counts.get(value, 0) for value in ("BLOCKED", "ABORTED", "SKIPPED"))
-        valid = max(0, len(rows) - invalid)
+        valid = max(0, row_count - invalid)
         passed = counts.get("PASS", 0) + counts.get("EXPECTED", 0)
-        first_failure = next((row for row in rows if row.get("final_status") not in NORMAL_CASE_STATUSES), None)
         return {
-            "rows": len(rows),
+            "rows": row_count,
             "counts": counts,
             "invalid": invalid,
             "valid": valid,
