@@ -10,9 +10,7 @@ result/<timestamp>_<task>/
   cases.csv
 ```
 
-`serial_logs` 是连续原始证据；`tool.log` 是唯一人读执行账本；`results.csv` 每 case 一行；`cases.csv` 在设备动作前冻结。固定任务一次性冻结全部 case；随机长压只冻结任务身份，每条随机 case 生成后、播放或发送串口命令前立即追加到 `cases.csv`。未生成的轮次不得出现在该文件中。
-
-这是可选扩展，不改变原有“一次运行一个目录”的默认契约。若需要“同一设备 + 同一任务”的多次运行共用一个目录，可显式传入 `TaskArtifacts(..., run_name="<固定目录名>", append=True)`：同一 `run_name` 会复用该目录，并向 `serial_logs`、`tool.log`、`results.csv`、`cases.csv` 追加。该模式只用于同一逻辑任务，不得把不同设备或不同任务混入同一目录。多设备批次建议目录名：`<批次时间戳>_<场景>_<设备ID>_<任务简介>_<总次数>rounds`。
+`serial_logs` 是连续原始证据；`tool.log` 是唯一人读执行账本；`results.csv` 每 case 一行；`cases.csv` 在设备动作前冻结。
 
 所有 `tool.log` 行使用北京时间 `YYYY-MM-DD HH:mm:ss.SSS`，标签只能是 `[SYSTEM]`、`[CASE]`、`[ACTION]`、`[COMMAND]`、`[DEVICE]`、`[ONLINE]`、`[PLAYER]`、`[ERROR]`、`[RESULT]`、`[SUMMARY]`。冒号右侧必须是 profile 正则捕获的原始值。
 
@@ -20,8 +18,6 @@ result/<timestamp>_<task>/
 2026-08-17 10:00:00.000 [CASE 1/2] START 场景=<scenario> 文本=<text> case_id=<case>
 2026-08-17 10:00:00.010 [ACTION] 播放: <text>，文件=<basename>
 2026-08-17 10:00:00.120 [DEVICE] WAKE: <profile-capture>
-2026-08-17 10:00:00.121 [DEVICE] keyword: <native-value>
-2026-08-17 10:00:00.122 [DEVICE] intent: <native-value>
 2026-08-17 10:00:00.300 [PLAYER] PLAYER: <profile-capture>
 2026-08-17 10:00:01.000 [ONLINE] ONLINE_ASR:
 2026-08-17 10:00:01.010 [ERROR] 异常: <profile-reason>，处理=本轮收尾后继续，证据=<port>#<cursor>
@@ -31,4 +27,4 @@ result/<timestamp>_<task>/
 
 不得输出正则、rule id、捕获字段名、内部播报/关联 ID、绝对路径或项目自行格式化文本。播放器 raw marker 不得转换成固定单词。异常后仍持续输出随后到达的事实；仅轮末输出一次本轮 `[RESULT]`。
 
-`results.csv` 使用通用字段：原始/逻辑事实计数、关联结论、异常码、主要原因、profile 版本和完整事实 JSON；不得固定某项目的识别字段列。跨场景交接事实和项目原生关联 ID 仅可写入 `facts_json`，不得创建新的结果 sidecar。`ToolLogValidator` 必须验证格式、唯一 RESULT、事实顺序、空值、原样展示、持续观察、计数一致性和四类产物边界。
+`results.csv` 使用通用字段：原始/逻辑事实计数、关联结论、异常码、主要原因、profile 版本和完整事实 JSON；不得固定某项目的识别字段列。`ToolLogValidator` 必须验证格式、唯一 RESULT、事实顺序、空值、原样展示、持续观察、计数一致性和四类产物边界。

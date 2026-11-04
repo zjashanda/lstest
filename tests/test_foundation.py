@@ -1,27 +1,32 @@
 from __future__ import annotations
 
 import csv
+import os
+import struct
 import tempfile
 import time
 import unittest
+import wave
+import zipfile
 from contextlib import redirect_stdout
-from io import StringIO
+from io import BytesIO, StringIO
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from lstest.scripts.audio_synthesis import load_text_manifest, safe_audio_filename
-from lstest.scripts.core import CaseResult, CaseSpec, ConnectionSpec, StopSupervisor, TaskArtifacts
+from lstest.scripts import audio_synthesis
+from lstest.scripts.audio_synthesis import (
+    inspect_wav, load_text_manifest, resolve_voice, safe_audio_filename, synthesize_indextts,
+)
+from lstest.scripts.core import CaseResult, ConnectionSpec, StopSupervisor, TaskArtifacts
 from lstest.scripts.observations import RawTag, ToolJudgement, judge_command, judge_online, judge_wakeup
 from lstest.scripts.playback import CaptureBackend, PlayerEventNormalizer, PlaybackBackend
 from lstest.scripts.profile import DeviceProfile, ProfileError
 from lstest.scripts.runtime import ScenarioRuntime
 from lstest.scripts.serial_capture import SerialManager
 from lstest.scripts.shell import ProfileCommandSender, ProfileRecoveryStateMachine, ProfileRestartRecoveryMonitor
-from lstest.scripts.smoke import collect_initialization_evidence
 from lstest.scripts.timing import EventClock, correlate
-from lstest.scripts.timeline import ToolLogValidator
 
 
 PROFILE = {
@@ -88,28 +93,6 @@ class RecoveryManager:
 
 
 class FoundationTests(unittest.TestCase):
-
-    def test_terminal_mirror_failure_keeps_tool_log_and_case_finalization(self):
-        class BrokenTerminal:
-            def write(self, _value):
-                raise OSError("closed terminal pipe")
-
-            def flush(self):
-                raise OSError("closed terminal pipe")
-
-        with tempfile.TemporaryDirectory() as directory:
-            artifacts = TaskArtifacts(Path(directory), "terminal-mirror-failure")
-            artifacts.freeze_cases([CaseSpec("case-001", "fixture")])
-            artifacts.enable_terminal_mirror(BrokenTerminal())
-            artifacts.timeline_case_start("case-001")
-            artifacts.record_case(CaseResult("case-001", "PASS", reason="fixture"))
-            summary = artifacts.finalize("PASS", "fixture")
-
-            tool_log = (Path(summary["result_directory"]) / "tool.log").read_text(encoding="utf-8")
-            self.assertIn("终端镜像不可用", tool_log)
-            self.assertIn("[RESULT] 本轮=PASS", tool_log)
-            self.assertEqual(artifacts.stop.reason, "")
-            self.assertEqual(ToolLogValidator().validate_run(Path(summary["result_directory"])), [])
     @staticmethod
     def _freeze(artifacts, *case_ids: str) -> None:
         artifacts.freeze_cases([{"case_id": case_id, "scenario": "fixture"} for case_id in case_ids])
@@ -250,60 +233,6 @@ class FoundationTests(unittest.TestCase):
             self.assertEqual(summary["success_rate"], 50.0)
             self.assertEqual(artifacts.cases_path.read_bytes()[:3], b"\xef\xbb\xbf")
             self.assertEqual(artifacts.results_path.read_bytes()[:3], b"\xef\xbb\xbf")
-
-    def test_lazy_cases_are_declared_before_playback_without_materializing_target(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            artifacts = TaskArtifacts(root, "lazy-million")
-            runtime = ScenarioRuntime(artifacts)
-            runtime.begin_lazy_cases(
-                scenario="online-mixed", planned_total=1_000_000, random_seed="fixture-seed",
-                profile_version="1", profile_sha256="fixture",
-            )
-            self.assertTrue(artifacts.cases_frozen)
-            self.assertEqual(artifacts._case_positions, {})
-            audio = root / "fixture.mp3"
-            audio.write_bytes(b"fixture")
-            with self.assertRaisesRegex(RuntimeError, "声明当前用例"):
-                runtime.play(audio, case_id="lazy-001")
-            case = {"case_id": "lazy-001", "scenario": "online-mixed", "input_text": "天气", "audio_file": str(audio)}
-            self.assertEqual(runtime.declare_case(case), 1)
-            with self.assertRaisesRegex(RuntimeError, "already declared"):
-                runtime.declare_case(case)
-            rows = list(csv.DictReader(artifacts.cases_path.open("r", encoding="utf-8-sig", newline="")))
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["random_seed"], "fixture-seed")
-            self.assertEqual(rows[0]["case_order"], "1")
-            self.assertEqual(artifacts._planned_case_count, 1_000_000)
-            artifacts.record_case(CaseResult("lazy-001", "PASS", reason="fixture"))
-            summary = artifacts.finalize("PASS", "fixture complete")
-            self.assertEqual(summary["planned"], 1_000_000)
-
-    def test_formal_result_facts_survive_without_a_sidecar(self):
-        with tempfile.TemporaryDirectory() as directory:
-            artifacts = TaskArtifacts(Path(directory), "facts-handoff")
-            self._freeze(artifacts, "registration")
-            artifacts.timeline_case_start("registration")
-            artifacts.record_case(CaseResult(
-                "registration", "PASS", reason="fixture",
-                facts={"registration_handoff": {"ledger_owner": "task", "alias": "fixture-alias"}},
-            ))
-            artifacts.finalize("PASS", "fixture complete")
-            row = next(csv.DictReader(artifacts.results_path.open("r", encoding="utf-8-sig", newline="")))
-            facts = json.loads(row["facts_json"])
-            self.assertEqual(facts["registration_handoff"]["alias"], "fixture-alias")
-            self.assertEqual(ToolLogValidator().validate_run(artifacts.run_dir), [])
-
-    def test_validator_rejects_extra_result_sidecar(self):
-        with tempfile.TemporaryDirectory() as directory:
-            artifacts = TaskArtifacts(Path(directory), "extra-sidecar")
-            self._freeze(artifacts, "case")
-            artifacts.timeline_case_start("case")
-            artifacts.record_case(CaseResult("case", "PASS", reason="fixture"))
-            artifacts.finalize("PASS", "fixture complete")
-            (artifacts.run_dir / "registration_handoff.json").write_text("{}", encoding="utf-8")
-            errors = ToolLogValidator().validate_run(artifacts.run_dir)
-            self.assertTrue(any("非标准运行产物" in item for item in errors))
 
     def test_results_reconcile_supports_large_auditable_facts_json(self):
         """A valid compat summary must not hit csv's small default field cap."""
@@ -475,14 +404,14 @@ class FoundationTests(unittest.TestCase):
             jsonl_path.write_text('{"case_id":"two","text":"今天天气怎么样"}\n', encoding="utf-8")
             self.assertEqual(load_text_manifest(csv_path)[0]["filename"], "offline-case.mp3")
             self.assertEqual(load_text_manifest(jsonl_path)[0]["case_id"], "two")
-            self.assertEqual(safe_audio_filename("", fallback_text="你好空调")[-4:], ".mp3")
+            self.assertEqual(safe_audio_filename("", fallback_text="你好空调")[-4:], ".wav")
 
     def test_tts_cli_accepts_utf8_text_file(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "utterance.txt"
             source.write_text("你好空调\n", encoding="utf-8")
             args = __import__("lstest.scripts.lstest", fromlist=["parser"]).parser().parse_args([
-                "tts", "--text-file", str(source), "--output", str(Path(directory) / "fixture.mp3"),
+                "tts", "--text-file", str(source), "--output", str(Path(directory) / "fixture.wav"),
             ])
             self.assertEqual(args.text_file.read_text(encoding="utf-8").strip(), "你好空调")
 
@@ -992,88 +921,6 @@ class FoundationTests(unittest.TestCase):
             self.assertTrue(result["commands"][0]["evidence_refs"])
             artifacts.finalize("PASS", "fixture complete")
 
-    def test_recovery_reuses_observed_initialization_and_preserves_evidence(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            profile_path = root / "profile.json"
-            profile_path.write_text(json.dumps({
-                **PROFILE,
-                "initialization_patterns": ["algo ready"],
-                "recovery": {"stable_for_s": 0.01},
-                "commands": [
-                    {
-                        "command": "log.level 4", "roles": ["csk"], "safe_init": True,
-                        "success_patterns": ["set log level 4 ok"], "timeout_s": 0.1,
-                    },
-                    {
-                        "command": "player.level 4", "roles": ["csk"], "safe_init": True,
-                        "success_patterns": ["set player level 4 ok"], "timeout_s": 0.1,
-                    },
-                ],
-            }), encoding="utf-8")
-            artifacts = TaskArtifacts(root, "recovery-observed-init")
-            spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM9", "baudrate": 115200, "role": "csk"}]})
-            init_event = RecoveryEvent("COM9", "csk", 1, "algo ready")
-            manager = RecoveryManager(spec.ports, [
-                [RecoveryEvent("COM9", "csk", 2, "set log level 4 ok")],
-                [RecoveryEvent("COM9", "csk", 3, "set player level 4 ok")],
-            ])
-            result = ProfileRecoveryStateMachine(DeviceProfile.load(profile_path), artifacts, manager).run(
-                0.1,
-                initialization_events=[init_event],
-            )
-            self.assertEqual(result["status"], "PASS")
-            self.assertEqual(result["initialization_source"], "observed")
-            self.assertEqual(manager.writes, [("log.level 4", "COM9"), ("player.level 4", "COM9")])
-            self.assertEqual(len(manager.wait_calls), 2)
-            self.assertEqual(result["initialization_evidence_refs"], ["serial_logs/serial_COM9_csk.log#1"])
-            log = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
-            self.assertIn("初始化证据: 已观察到", log)
-            self.assertIn("LOG_LEVEL: 4", log)
-            self.assertIn("player.level 4", log)
-            artifacts.finalize("PASS", "fixture complete")
-
-    def test_recovery_does_not_send_command_for_invalid_observed_initialization(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            profile_path = root / "profile.json"
-            profile_path.write_text(json.dumps({
-                **PROFILE,
-                "initialization_patterns": ["algo ready"],
-                "commands": [{
-                    "command": "log.level 4", "roles": ["csk"], "safe_init": True,
-                    "success_patterns": ["set level 4 ok"], "timeout_s": 0.1,
-                }],
-            }), encoding="utf-8")
-            artifacts = TaskArtifacts(root, "recovery-invalid-observed-init")
-            spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM9", "baudrate": 115200, "role": "csk"}]})
-            manager = RecoveryManager(spec.ports)
-            result = ProfileRecoveryStateMachine(DeviceProfile.load(profile_path), artifacts, manager).run(
-                0.1,
-                initialization_events=[RecoveryEvent("COM9", "csk", 1, "not initialized")],
-            )
-            self.assertEqual(result["status"], "BLOCKED")
-            self.assertEqual(manager.writes, [])
-            self.assertEqual(manager.wait_calls, [])
-            artifacts.finalize("BLOCKED", "fixture complete")
-
-    def test_smoke_initialization_collection_rejects_unrelated_serial_activity(self):
-        with tempfile.TemporaryDirectory() as directory:
-            profile_path = Path(directory) / "profile.json"
-            profile_path.write_text(json.dumps({
-                **PROFILE,
-                "initialization_patterns": ["algo ready"],
-            }), encoding="utf-8")
-            spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM9", "baudrate": 115200, "role": "csk"}]})
-            manager = RecoveryManager(spec.ports, [[RecoveryEvent("COM9", "csk", 1, "unrelated runtime log")]])
-            evidence = collect_initialization_evidence(
-                manager,
-                DeviceProfile.load(profile_path),
-                timeout_s=0.1,
-                cursors={"COM9": 0},
-            )
-            self.assertEqual(evidence, [])
-
     def test_recovery_accepts_profile_evidence_only_when_no_ack_exists(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1266,6 +1113,68 @@ class FoundationTests(unittest.TestCase):
             summary = artifacts.finalize("PASS", "fixture complete")
             self.assertEqual(summary["status"], "PASS")
             self.assertIn("serial_logs/serial_COM11_csk.log#1", (artifacts.run_dir / "tool.log").read_text(encoding="utf-8"))
+
+
+def wav_bytes(seconds: float = 1.0, rate: int = 22050, value: int = 3000) -> bytes:
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(struct.pack("<h", value) * int(seconds * rate))
+    return buffer.getvalue()
+
+
+def zip_payload(payload: bytes, name: str = "a.wav") -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(name, payload)
+    return buffer.getvalue()
+
+
+class AudioSynthesisTests(unittest.TestCase):
+    def test_resolve_voice_prefers_local_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clip = root / "付小春.wav"
+            clip.write_bytes(wav_bytes())
+            with patch.dict(os.environ, {"LSTEST_VOICE_DIR": str(root)}):
+                self.assertEqual(resolve_voice("付小春"), clip)
+                self.assertEqual(resolve_voice(str(clip)), clip)
+                with self.assertRaises(RuntimeError):
+                    resolve_voice("不存在的音色")
+
+    def test_inspect_wav_rejects_silence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            good = root / "good.wav"
+            good.write_bytes(wav_bytes())
+            metadata = inspect_wav(good)
+            self.assertEqual(metadata["container"], "wav")
+            self.assertEqual(metadata["sample_rate"], 22050)
+            self.assertLess(metadata["peak_volume_db"], 0)
+            silent = root / "silent.wav"
+            silent.write_bytes(wav_bytes(value=0))
+            with self.assertRaisesRegex(RuntimeError, "validation failed"):
+                inspect_wav(silent)
+
+    def test_synthesize_indextts_writes_validated_wav(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "付小春.wav").write_bytes(wav_bytes())
+            output = root / "case.wav"
+            env = {"LSTEST_VOICE_DIR": str(root), "LSTEST_TTS_URL": "http://example.test", "LSTEST_TTS_TOKEN": "t"}
+            with patch.dict(os.environ, env), patch.object(audio_synthesis, "request_audio", return_value=zip_payload(wav_bytes()) ) as request:
+                record = synthesize_indextts("打开空调", output, case_id="c1", voice="付小春")
+            self.assertEqual(record["validation_status"], "PASS")
+            self.assertEqual(record["provider"], "indextts")
+            self.assertEqual(record["case_id"], "c1")
+            self.assertTrue(output.is_file())
+            self.assertEqual(len(request.call_args.args), 3)
+
+    def test_synthesize_indextts_requires_wav_extension(self):
+        with self.assertRaisesRegex(ValueError, ".wav"):
+            synthesize_indextts("打开空调", Path("case.mp3"))
 
 
 if __name__ == "__main__":

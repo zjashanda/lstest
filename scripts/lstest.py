@@ -18,16 +18,14 @@ for import_root in (PROJECT_ROOT, SCRIPT_ROOT):
 
 try:
     from .audio_synthesis import (
-        DEFAULT_PITCH, DEFAULT_RATE, DEFAULT_VOICE, DEFAULT_VOLUME, load_text_manifest,
-        synthesize_edge_tts, synthesize_manifest,
+        DEFAULT_VOICE, load_text_manifest, synthesize_indextts, synthesize_manifest,
     )
     from .core import ConnectionSpec
     from .profile import DeviceProfile, ProfileError
     from .smoke import run_smoke
 except ImportError:
     from audio_synthesis import (
-        DEFAULT_PITCH, DEFAULT_RATE, DEFAULT_VOICE, DEFAULT_VOLUME, load_text_manifest,
-        synthesize_edge_tts, synthesize_manifest,
+        DEFAULT_VOICE, load_text_manifest, synthesize_indextts, synthesize_manifest,
     )
     from core import ConnectionSpec
     from profile import DeviceProfile, ProfileError
@@ -52,16 +50,14 @@ def parser() -> argparse.ArgumentParser:
     list_cmd = sub.add_parser("list", help="列出公共能力")
     list_cmd.add_argument("--json", action="store_true")
 
-    tts = sub.add_parser("tts", help="使用 Edge TTS 合成并校验一条 MP3 音频")
+    tts = sub.add_parser("tts", help="使用 IndexTTS 合成并校验一条 WAV 音频")
     text_source = tts.add_mutually_exclusive_group(required=True)
     text_source.add_argument("--text")
     text_source.add_argument("--text-file", type=Path, help="包含单条 UTF-8 语料的文本文件")
     tts.add_argument("--output", type=Path, required=True)
     tts.add_argument("--case-id", default="")
-    tts.add_argument("--voice", default=DEFAULT_VOICE)
-    tts.add_argument("--rate", default=DEFAULT_RATE)
-    tts.add_argument("--pitch", default=DEFAULT_PITCH)
-    tts.add_argument("--volume", default=DEFAULT_VOLUME)
+    tts.add_argument("--voice", default=DEFAULT_VOICE, help="本地音色名或参考音频路径")
+    tts.add_argument("--emotion", default=None, help="可选情感参考音频路径")
     tts.add_argument("--timeout-s", type=float, default=60.0)
     tts.add_argument("--retries", type=int, default=1)
 
@@ -69,10 +65,8 @@ def parser() -> argparse.ArgumentParser:
     tts_manifest.add_argument("--input", type=Path, required=True, help="包含 text 列的 UTF-8 CSV 或 JSONL")
     tts_manifest.add_argument("--output-dir", type=Path, required=True)
     tts_manifest.add_argument("--manifest-output", type=Path, required=True)
-    tts_manifest.add_argument("--voice", default=DEFAULT_VOICE)
-    tts_manifest.add_argument("--rate", default=DEFAULT_RATE)
-    tts_manifest.add_argument("--pitch", default=DEFAULT_PITCH)
-    tts_manifest.add_argument("--volume", default=DEFAULT_VOLUME)
+    tts_manifest.add_argument("--voice", default=DEFAULT_VOICE, help="默认音色，行内 voice 列可覆盖")
+    tts_manifest.add_argument("--emotion", default=None, help="可选情感参考音频路径")
     tts_manifest.add_argument("--timeout-s", type=float, default=60.0)
     tts_manifest.add_argument("--retries", type=int, default=1)
 
@@ -168,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             "skill": "lstest",
             "capabilities": [
                 "dynamic-serial", "profile", "evidence", "basic-smoke", "safe-stop",
-                "edge-tts", "audio-device-scan", "laid-installer", "device-key-playback",
+                "indextts-tts", "audio-device-scan", "laid-installer", "device-key-playback",
             ],
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2) if args.json else "\n".join(payload["capabilities"]))
@@ -178,16 +172,16 @@ def main(argv: list[str] | None = None) -> int:
             text = args.text
             if args.text_file is not None:
                 text = args.text_file.read_text(encoding="utf-8").strip()
-            payload = synthesize_edge_tts(
-                text, args.output, case_id=args.case_id, voice=args.voice, rate=args.rate,
-                pitch=args.pitch, volume=args.volume, timeout_s=args.timeout_s, retries=args.retries,
+            payload = synthesize_indextts(
+                text, args.output, case_id=args.case_id, voice=args.voice,
+                emotion=args.emotion, timeout_s=args.timeout_s, retries=args.retries,
             )
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
         if args.command == "tts-manifest":
             payload = synthesize_manifest(
                 load_text_manifest(args.input), args.output_dir, args.manifest_output,
-                voice=args.voice, rate=args.rate, pitch=args.pitch, volume=args.volume,
+                voice=args.voice, emotion=args.emotion,
                 timeout_s=args.timeout_s, retries=args.retries,
             )
             print(json.dumps(payload, ensure_ascii=False, indent=2))

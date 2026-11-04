@@ -1,25 +1,32 @@
-"""Edge TTS synthesis with reproducible manifests and audio validation."""
+"""IndexTTS synthesis with reproducible manifests and audio validation."""
 
 from __future__ import annotations
 
-import asyncio
 import csv
 import hashlib
-import importlib.metadata
 import json
+import math
+import mimetypes
 import os
 import re
-import subprocess
+import socket
+import uuid
+import wave
+import zipfile
+from array import array
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
 
 
 BEIJING = timezone(timedelta(hours=8))
-DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
-DEFAULT_RATE = "-10%"
-DEFAULT_PITCH = "+0Hz"
-DEFAULT_VOLUME = "+0%"
+DEFAULT_VOICE = "付小春"
+DEFAULT_TIMEOUT_S = 60.0
+VOICE_SUFFIXES = {".wav", ".mp3", ".flac", ".m4a", ".ogg"}
 MANIFEST_FIELDS = [
     "case_id", "text", "audio_path", "provider", "model", "voice", "rate", "pitch", "volume",
     "container", "codec", "sample_rate", "channels", "duration_seconds", "size_bytes",
@@ -40,144 +47,222 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def ffprobe(path: Path) -> dict[str, Any]:
-    completed = subprocess.run(
-        [
-            "ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
-            "stream=codec_name,sample_rate,channels,sample_fmt:format=format_name,duration", "-of", "json", str(path),
-        ],
-        text=True, encoding="utf-8", errors="replace", capture_output=True, check=False, timeout=20,
+def voice_dir() -> Path:
+    configured = os.environ.get("LSTEST_VOICE_DIR")
+    return Path(configured).expanduser() if configured else Path.home() / ".lstest" / "voices"
+
+
+def resolve_voice(voice: str) -> Path:
+    """Resolve a voice name to a local reference clip, or accept a direct audio path."""
+    value = (voice or "").strip()
+    if not value:
+        raise ValueError("voice cannot be empty")
+    direct = Path(value).expanduser()
+    if direct.is_file() and direct.suffix.lower() in VOICE_SUFFIXES:
+        return direct
+    for candidate in (voice_dir() / f"{value}.wav", voice_dir() / f"{value}{direct.suffix}"):
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError(
+        f"voice reference not found: {value}; expected {voice_dir() / (value + '.wav')} "
+        f"or an explicit audio file path"
     )
-    if completed.returncode:
-        raise RuntimeError((completed.stderr or completed.stdout or "ffprobe failed").strip())
-    payload = json.loads(completed.stdout)
-    stream = (payload.get("streams") or [{}])[0]
-    media_format = payload.get("format") or {}
-    return {
-        "container": str(media_format.get("format_name") or "").split(",")[0],
-        "codec": str(stream.get("codec_name") or ""),
-        "sample_rate": int(stream.get("sample_rate") or 0),
-        "channels": int(stream.get("channels") or 0),
-        "sample_fmt": str(stream.get("sample_fmt") or ""),
-        "duration_seconds": round(float(media_format.get("duration") or 0), 6),
-    }
 
 
-def volume_metrics(path: Path) -> tuple[float, float]:
-    sink = "NUL" if os.name == "nt" else "/dev/null"
-    completed = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-nostdin", "-i", str(path), "-af", "volumedetect", "-f", "null", sink],
-        text=True, encoding="utf-8", errors="replace", capture_output=True, check=False, timeout=30,
+def tts_config_paths() -> list[Path]:
+    candidates: list[Path] = []
+    configured = os.environ.get("LSTEST_TTS_CONFIG")
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    candidates.append(Path.home() / ".lstest" / "tts.json")
+    for base in (Path.home() / ".claude" / "skills", Path.home() / ".codex" / "skills", Path.home() / ".opencode" / "skills"):
+        candidates.append(base / "index-tts" / "references" / "index_tts.json")
+        candidates.append(base / "lstts" / "references" / "index_tts.json")
+    return candidates
+
+
+def load_tts_config() -> dict[str, Any]:
+    """Load service credentials from env or the installed IndexTTS skill config."""
+    url = os.environ.get("LSTEST_TTS_URL")
+    token = os.environ.get("LSTEST_TTS_TOKEN")
+    if url and token:
+        return {
+            "base_url": url,
+            "token": token,
+            "request_timeout": float(os.environ.get("LSTEST_TTS_TIMEOUT", "10")),
+        }
+    for path in tts_config_paths():
+        if path.is_file():
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            if payload.get("base_url") and payload.get("token"):
+                return payload
+    raise RuntimeError(
+        "IndexTTS service config not found; set LSTEST_TTS_URL/LSTEST_TTS_TOKEN "
+        "or LSTEST_TTS_CONFIG"
     )
-    if completed.returncode:
-        raise RuntimeError((completed.stderr or completed.stdout or "ffmpeg decode failed").strip())
-    output = completed.stderr or ""
-    mean_match = re.search(r"mean_volume:\s*(-?[\d.]+)\s*dB", output)
-    peak_match = re.search(r"max_volume:\s*(-?[\d.]+)\s*dB", output)
-    if not mean_match or not peak_match:
-        raise RuntimeError(f"volumedetect output missing for {path}")
-    return float(mean_match.group(1)), float(peak_match.group(1))
 
 
-def inspect_edge_tts_mp3(path: Path) -> dict[str, Any]:
+def inspect_wav(path: Path) -> dict[str, Any]:
+    """Validate a synthesized WAV without external tools and return manifest metrics."""
     if not path.is_file() or path.stat().st_size <= 0:
         raise RuntimeError(f"audio file is missing or empty: {path}")
-    metadata = ffprobe(path)
-    mean_db, peak_db = volume_metrics(path)
+    with wave.open(str(path), "rb") as handle:
+        channels = handle.getnchannels()
+        width = handle.getsampwidth()
+        rate = handle.getframerate()
+        frames = handle.getnframes()
+        data = handle.readframes(frames)
+    if rate <= 0 or frames <= 0:
+        raise RuntimeError(f"audio file has no frames: {path}")
+    duration = frames / rate
+    mean_db = -120.0
+    peak_db = -120.0
+    if width == 2 and data:
+        samples = array("h")
+        samples.frombytes(data[: len(data) - len(data) % 2])
+        total = len(samples)
+        peak = max(abs(min(samples)), abs(max(samples)))
+        square = sum(value * value for value in samples) / total
+        peak_db = 20 * math.log10(peak / 32768) if peak else -120.0
+        mean_db = 10 * math.log10(square / (32768 ** 2)) if square else -120.0
+    codec = {1: "pcm_u8", 2: "pcm_s16le", 3: "pcm_s24le", 4: "pcm_s32le"}.get(width, f"pcm_{width * 8}")
+    metadata = {
+        "container": "wav",
+        "codec": codec,
+        "sample_rate": rate,
+        "channels": channels,
+        "duration_seconds": round(duration, 6),
+        "mean_volume_db": round(mean_db, 1),
+        "peak_volume_db": round(peak_db, 1),
+    }
     valid = (
-        metadata["container"] == "mp3"
-        and metadata["codec"] == "mp3"
-        and metadata["sample_rate"] == 24000
-        and metadata["channels"] == 1
-        and metadata["duration_seconds"] > 0.2
+        width == 2
+        and duration > 0.2
         and mean_db > -60.0
         and peak_db <= 0.0
     )
     if not valid:
         raise RuntimeError(
-            "Edge TTS output validation failed: "
+            "IndexTTS output validation failed: "
             f"metadata={metadata}, mean_volume_db={mean_db}, peak_volume_db={peak_db}"
         )
-    return {**metadata, "mean_volume_db": mean_db, "peak_volume_db": peak_db}
+    return metadata
 
 
-async def _save_edge_tts(
+def _multipart_fields(speaker: Path, text: str, emotion: Path | None) -> tuple[bytes, str]:
+    boundary = "----lstest" + uuid.uuid4().hex
+    text_bytes = text.encode("utf-8")
+    parts: list[tuple[str, str, bytes, str]] = [
+        ("spk_audio_prompt", speaker.name, speaker.read_bytes(), mimetypes.guess_type(speaker.name)[0] or "application/octet-stream"),
+        ("text", ".request.txt", text_bytes, "text/plain"),
+    ]
+    if emotion is not None:
+        parts.append(("emo_audio_prompt", emotion.name, emotion.read_bytes(), mimetypes.guess_type(emotion.name)[0] or "application/octet-stream"))
+    chunks: list[bytes] = []
+    for field, filename, payload, content_type in parts:
+        header = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; '
+            f'filename="{filename}"\r\nContent-Type: {content_type}\r\n\r\n'
+        )
+        chunks.extend([header.encode("utf-8"), payload, b"\r\n"])
+    chunks.append(f"--{boundary}--\r\n".encode())
+    return b"".join(chunks), boundary
+
+
+def request_audio(
+    config: Mapping[str, Any],
+    speaker: Path,
     text: str,
-    destination: Path,
     *,
-    voice: str,
-    rate: str,
-    pitch: str,
-    volume: str,
-    timeout_s: float,
-) -> None:
+    emotion: Path | None = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+) -> bytes:
+    """POST one text/voice pair and return the raw ZIP payload."""
+    body, boundary = _multipart_fields(speaker, text, emotion)
+    base = str(config.get("base_url") or "").rstrip("/")
+    endpoint = "/v1/emotion" if emotion is not None else "/v1/clone"
+    url = urlsplit(base + endpoint)
+    if url.scheme not in ("http", "https") or not url.hostname:
+        raise RuntimeError("invalid IndexTTS base_url")
+    request = Request(url.geturl(), data=body, method="POST")
+    request.add_header("Authorization", "Bearer " + str(config.get("token") or ""))
+    request.add_header("Content-Type", "multipart/form-data; boundary=" + boundary)
+    request.add_header("Content-Length", str(len(body)))
+    request.add_header("Connection", "close")
     try:
-        import edge_tts
-    except ImportError as error:
-        raise RuntimeError("edge-tts is required; install lstest/config/requirements.txt") from error
-    communication = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch, volume=volume)
-    await asyncio.wait_for(communication.save(str(destination)), timeout=max(0.1, float(timeout_s)))
+        with urlopen(request, timeout=max(0.1, float(timeout_s))) as response:
+            payload = response.read()
+            if response.status != 200:
+                raise RuntimeError(f"synthesis service returned HTTP {response.status}")
+            if (response.headers.get_content_type() or "") != "application/zip":
+                raise RuntimeError("synthesis service did not return a ZIP payload")
+            return payload
+    except HTTPError as error:
+        raise RuntimeError(f"synthesis service returned HTTP {error.code}") from error
+    except (URLError, socket.timeout) as error:
+        raise RuntimeError(f"synthesis request failed: {error}") from error
 
 
-def edge_tts_version() -> str:
-    try:
-        return importlib.metadata.version("edge-tts")
-    except importlib.metadata.PackageNotFoundError:
-        return "unknown"
+def extract_wav(payload: bytes, destination: Path) -> Path:
+    """Extract the single WAV inside the service ZIP payload."""
+    with zipfile.ZipFile(BytesIO(payload)) as archive:
+        entries = []
+        for item in archive.infolist():
+            name = item.filename.replace("\\", "/")
+            if name.startswith("/") or ".." in name.split("/") or ":" in name:
+                raise RuntimeError("service ZIP contains an unsafe path")
+            if not item.is_dir() and Path(name).suffix.lower() == ".wav":
+                entries.append(item)
+        if len(entries) != 1:
+            raise RuntimeError(f"service returned {len(entries)} WAV files, expected 1")
+        destination.write_bytes(archive.read(entries[0]))
+    return destination
 
 
-def synthesize_edge_tts(
+def synthesize_indextts(
     text: str,
     output: Path,
     *,
     case_id: str = "",
     voice: str = DEFAULT_VOICE,
-    rate: str = DEFAULT_RATE,
-    pitch: str = DEFAULT_PITCH,
-    volume: str = DEFAULT_VOLUME,
-    timeout_s: float = 60.0,
+    emotion: str | Path | None = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
     retries: int = 1,
 ) -> dict[str, Any]:
-    """Generate one validated Edge TTS MP3; retry transient synthesis failures once by default."""
+    """Generate one validated IndexTTS WAV; retry transient failures once by default."""
     normalized_text = (text or "").strip()
     if not normalized_text:
         raise ValueError("text cannot be empty")
-    if output.suffix.lower() != ".mp3":
-        raise ValueError("Edge TTS output must use the .mp3 extension")
+    if output.suffix.lower() != ".wav":
+        raise ValueError("IndexTTS output must use the .wav extension")
     if timeout_s <= 0:
         raise ValueError("timeout_s must be positive")
     if retries < 0:
         raise ValueError("retries must be >= 0")
 
+    speaker = resolve_voice(voice)
+    emotion_path = resolve_voice(str(emotion)) if emotion else None
+    config = load_tts_config()
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".part")
     failure: Exception | None = None
     for attempt in range(1, retries + 2):
         temporary.unlink(missing_ok=True)
         try:
-            asyncio.run(
-                _save_edge_tts(
-                    normalized_text,
-                    temporary,
-                    voice=voice,
-                    rate=rate,
-                    pitch=pitch,
-                    volume=volume,
-                    timeout_s=timeout_s,
-                )
-            )
-            metadata = inspect_edge_tts_mp3(temporary)
+            payload = request_audio(config, speaker, normalized_text, emotion=emotion_path, timeout_s=timeout_s)
+            extract_wav(payload, temporary)
+            metadata = inspect_wav(temporary)
             os.replace(temporary, output)
             return {
                 "case_id": case_id,
                 "text": normalized_text,
                 "audio_path": str(output),
-                "provider": "microsoft_edge_tts",
-                "model": "not_exposed_by_provider",
+                "provider": "indextts",
+                "model": "indextts",
                 "voice": voice,
-                "rate": rate,
-                "pitch": pitch,
-                "volume": volume,
+                "rate": "",
+                "pitch": "",
+                "volume": "",
                 **{name: metadata[name] for name in ("container", "codec", "sample_rate", "channels", "duration_seconds")},
                 "size_bytes": output.stat().st_size,
                 "mean_volume_db": metadata["mean_volume_db"],
@@ -186,8 +271,8 @@ def synthesize_edge_tts(
                 "clipping_status": "PASS" if metadata["peak_volume_db"] <= -0.1 else "WARN_NEAR_ZERO_DBFS",
                 "sha256": sha256_file(output),
                 "generated_at": now_iso(),
-                "tool": "edge-tts",
-                "tool_version": edge_tts_version(),
+                "tool": "indextts",
+                "tool_version": str(config.get("tool_version") or "http-api"),
                 "validation_status": "PASS",
                 "error": "",
             }
@@ -196,7 +281,7 @@ def synthesize_edge_tts(
             temporary.unlink(missing_ok=True)
             if attempt > retries:
                 break
-    raise RuntimeError(f"Edge TTS synthesis failed after {retries + 1} attempt(s): {failure}") from failure
+    raise RuntimeError(f"IndexTTS synthesis failed after {retries + 1} attempt(s): {failure}") from failure
 
 
 def safe_audio_filename(value: str, *, fallback_text: str) -> str:
@@ -205,7 +290,7 @@ def safe_audio_filename(value: str, *, fallback_text: str) -> str:
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._")
     if not stem:
         stem = hashlib.sha256(fallback_text.encode("utf-8")).hexdigest()[:16]
-    return f"{stem}.mp3"
+    return f"{stem}.wav"
 
 
 def load_text_manifest(path: Path) -> list[dict[str, str]]:
@@ -231,6 +316,7 @@ def load_text_manifest(path: Path) -> list[dict[str, str]]:
             "case_id": str(row.get("case_id") or f"row-{index - 1}"),
             "text": text,
             "filename": str(row.get("filename") or row.get("audio_filename") or ""),
+            "voice": str(row.get("voice") or "").strip(),
         })
     if not result:
         raise ValueError("text manifest has no rows")
@@ -253,10 +339,8 @@ def synthesize_manifest(
     manifest_output: Path,
     *,
     voice: str = DEFAULT_VOICE,
-    rate: str = DEFAULT_RATE,
-    pitch: str = DEFAULT_PITCH,
-    volume: str = DEFAULT_VOLUME,
-    timeout_s: float = 60.0,
+    emotion: str | Path | None = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
     retries: int = 1,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -264,12 +348,13 @@ def synthesize_manifest(
     for row in rows:
         case_id = str(row.get("case_id") or "")
         text = str(row.get("text") or "").strip()
+        row_voice = str(row.get("voice") or "").strip() or voice
         target = output_dir / safe_audio_filename(str(row.get("filename") or case_id), fallback_text=text)
         try:
             records.append(
-                synthesize_edge_tts(
-                    text, target, case_id=case_id, voice=voice, rate=rate, pitch=pitch,
-                    volume=volume, timeout_s=timeout_s, retries=retries,
+                synthesize_indextts(
+                    text, target, case_id=case_id, voice=row_voice, emotion=emotion,
+                    timeout_s=timeout_s, retries=retries,
                 )
             )
         except Exception as error:
@@ -277,14 +362,11 @@ def synthesize_manifest(
                 "case_id": case_id,
                 "text": text,
                 "audio_path": str(target),
-                "provider": "microsoft_edge_tts",
-                "voice": voice,
-                "rate": rate,
-                "pitch": pitch,
-                "volume": volume,
+                "provider": "indextts",
+                "voice": row_voice,
                 "generated_at": now_iso(),
-                "tool": "edge-tts",
-                "tool_version": edge_tts_version(),
+                "tool": "indextts",
+                "tool_version": "http-api",
                 "validation_status": "FAIL",
                 "error": f"{type(error).__name__}: {error}",
             })
