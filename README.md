@@ -36,6 +36,8 @@
 - `tests/__init__.py`
 - `tests/test_foundation.py`
 - `tests/test_profile_driven.py`
+- `voices/付小春.wav`
+- `voices/小宁.wav`
 
 ## Install the skill
 
@@ -85,7 +87,7 @@ Then restart Codex.
 ## 音频与设备
 
 - `tts` 与 `tts-manifest` 使用 IndexTTS 服务合成并校验 WAV 的时长、响度、静音/削波和 SHA-256；不再使用 edge-tts。
-- 音色取本地音色目录（默认 `~/.lstest/voices/<姓名>.wav`，可用 `LSTEST_VOICE_DIR` 覆盖）：默认音色 `付小春`，女性音色 `小宁`；也可直接传参考音频路径。
+- 音色取本地音色目录（默认 `~/.lstest/voices/<姓名>.wav`，可用 `LSTEST_VOICE_DIR` 覆盖），再回退到 skill 自带的 `voices/<姓名>.wav`：默认音色 `付小春`，女性音色 `小宁`；也可直接传参考音频路径。
 - 服务地址与 token 依次取 `LSTEST_TTS_URL`/`LSTEST_TTS_TOKEN`、`LSTEST_TTS_CONFIG`、`~/.lstest/tts.json`，或已安装 `index-tts` / `lstts` skill 的 `references/index_tts.json`。
 - 未指定声卡时使用系统默认 Render；指定稳定设备 key 时严格使用该设备，失败不回退。
 - FFmpeg 只用于音频归一化，Windows 实际播放使用 `pygame`/DirectSound，Linux 使用 `aplay`。

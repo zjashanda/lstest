@@ -24,6 +24,7 @@ from urllib.request import Request, urlopen
 
 
 BEIJING = timezone(timedelta(hours=8))
+SKILL_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_VOICE = "付小春"
 DEFAULT_TIMEOUT_S = 60.0
 VOICE_SUFFIXES = {".wav", ".mp3", ".flac", ".m4a", ".ogg"}
@@ -60,12 +61,17 @@ def resolve_voice(voice: str) -> Path:
     direct = Path(value).expanduser()
     if direct.is_file() and direct.suffix.lower() in VOICE_SUFFIXES:
         return direct
-    for candidate in (voice_dir() / f"{value}.wav", voice_dir() / f"{value}{direct.suffix}"):
+    for candidate in (
+        voice_dir() / f"{value}.wav",
+        voice_dir() / f"{value}{direct.suffix}",
+        SKILL_ROOT / "voices" / f"{value}.wav",
+        SKILL_ROOT / "voices" / f"{value}{direct.suffix}",
+    ):
         if candidate.is_file():
             return candidate
     raise RuntimeError(
-        f"voice reference not found: {value}; expected {voice_dir() / (value + '.wav')} "
-        f"or an explicit audio file path"
+        f"voice reference not found: {value}; expected {voice_dir() / (value + '.wav')}, "
+        f"{SKILL_ROOT / 'voices' / (value + '.wav')}, or an explicit audio file path"
     )
 
 
