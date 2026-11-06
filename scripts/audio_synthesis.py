@@ -5,22 +5,24 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-import math
-import mimetypes
 import os
 import re
-import socket
-import uuid
+import shutil
 import wave
-import zipfile
-from array import array
 from datetime import datetime, timedelta, timezone
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Iterable, Mapping
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+
+try:
+    from lstts_core.audio import inspect_wav as _core_inspect_wav
+    from lstts_core.client import extract_wav as _core_extract_wav
+    from lstts_core.client import request_audio as _core_request_audio
+    from lstts_core.config import load_config as _core_load_config
+    from lstts_core.voices import resolve_voice as _core_resolve_voice
+except ImportError as error:
+    raise ImportError(
+        'lstts_core is required. Run: pip install "lstts-core @ git+https://github.com/zjashanda/lstts.git@main"'
+    ) from error
 
 
 BEIJING = timezone(timedelta(hours=8))
@@ -61,18 +63,11 @@ def resolve_voice(voice: str) -> Path:
     direct = Path(value).expanduser()
     if direct.is_file() and direct.suffix.lower() in VOICE_SUFFIXES:
         return direct
-    for candidate in (
-        voice_dir() / f"{value}.wav",
-        voice_dir() / f"{value}{direct.suffix}",
-        SKILL_ROOT / "voices" / f"{value}.wav",
-        SKILL_ROOT / "voices" / f"{value}{direct.suffix}",
-    ):
+    configured = voice_dir()
+    for candidate in (configured / f"{value}.wav", configured / f"{value}{direct.suffix}"):
         if candidate.is_file():
             return candidate
-    raise RuntimeError(
-        f"voice reference not found: {value}; expected {voice_dir() / (value + '.wav')}, "
-        f"{SKILL_ROOT / 'voices' / (value + '.wav')}, or an explicit audio file path"
-    )
+    return _core_resolve_voice(value)
 
 
 def tts_config_paths() -> list[Path]:
@@ -90,89 +85,20 @@ def tts_config_paths() -> list[Path]:
 def load_tts_config() -> dict[str, Any]:
     """Load service credentials from env or the installed IndexTTS skill config."""
     url = os.environ.get("LSTEST_TTS_URL")
-    token = os.environ.get("LSTEST_TTS_TOKEN")
+    token = os.environ.get("LSTTS_TTS_TOKEN") or os.environ.get("LSTEST_TTS_TOKEN")
     if url and token:
-        return {
-            "base_url": url,
-            "token": token,
-            "request_timeout": float(os.environ.get("LSTEST_TTS_TIMEOUT", "10")),
-        }
-    for path in tts_config_paths():
-        if path.is_file():
-            payload = json.loads(path.read_text(encoding="utf-8-sig"))
-            if payload.get("base_url") and payload.get("token"):
-                return payload
-    raise RuntimeError(
-        "IndexTTS service config not found; set LSTEST_TTS_URL/LSTEST_TTS_TOKEN "
-        "or LSTEST_TTS_CONFIG"
-    )
+        return {"base_url": url, "token": token, "request_timeout": float(os.environ.get("LSTEST_TTS_TIMEOUT", "10"))}
+    payload = _core_load_config("index_tts.json")
+    if payload.get("base_url") and payload.get("token"):
+        return payload
+    raise RuntimeError("IndexTTS service config not found; set LSTEST_TTS_CONFIG or configure ~/.lstest/tts.json")
 
 
 def inspect_wav(path: Path) -> dict[str, Any]:
     """Validate a synthesized WAV without external tools and return manifest metrics."""
     if not path.is_file() or path.stat().st_size <= 0:
         raise RuntimeError(f"audio file is missing or empty: {path}")
-    with wave.open(str(path), "rb") as handle:
-        channels = handle.getnchannels()
-        width = handle.getsampwidth()
-        rate = handle.getframerate()
-        frames = handle.getnframes()
-        data = handle.readframes(frames)
-    if rate <= 0 or frames <= 0:
-        raise RuntimeError(f"audio file has no frames: {path}")
-    duration = frames / rate
-    mean_db = -120.0
-    peak_db = -120.0
-    if width == 2 and data:
-        samples = array("h")
-        samples.frombytes(data[: len(data) - len(data) % 2])
-        total = len(samples)
-        peak = max(abs(min(samples)), abs(max(samples)))
-        square = sum(value * value for value in samples) / total
-        peak_db = 20 * math.log10(peak / 32768) if peak else -120.0
-        mean_db = 10 * math.log10(square / (32768 ** 2)) if square else -120.0
-    codec = {1: "pcm_u8", 2: "pcm_s16le", 3: "pcm_s24le", 4: "pcm_s32le"}.get(width, f"pcm_{width * 8}")
-    metadata = {
-        "container": "wav",
-        "codec": codec,
-        "sample_rate": rate,
-        "channels": channels,
-        "duration_seconds": round(duration, 6),
-        "mean_volume_db": round(mean_db, 1),
-        "peak_volume_db": round(peak_db, 1),
-    }
-    valid = (
-        width == 2
-        and duration > 0.2
-        and mean_db > -60.0
-        and peak_db <= 0.0
-    )
-    if not valid:
-        raise RuntimeError(
-            "IndexTTS output validation failed: "
-            f"metadata={metadata}, mean_volume_db={mean_db}, peak_volume_db={peak_db}"
-        )
-    return metadata
-
-
-def _multipart_fields(speaker: Path, text: str, emotion: Path | None) -> tuple[bytes, str]:
-    boundary = "----lstest" + uuid.uuid4().hex
-    text_bytes = text.encode("utf-8")
-    parts: list[tuple[str, str, bytes, str]] = [
-        ("spk_audio_prompt", speaker.name, speaker.read_bytes(), mimetypes.guess_type(speaker.name)[0] or "application/octet-stream"),
-        ("text", ".request.txt", text_bytes, "text/plain"),
-    ]
-    if emotion is not None:
-        parts.append(("emo_audio_prompt", emotion.name, emotion.read_bytes(), mimetypes.guess_type(emotion.name)[0] or "application/octet-stream"))
-    chunks: list[bytes] = []
-    for field, filename, payload, content_type in parts:
-        header = (
-            f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; '
-            f'filename="{filename}"\r\nContent-Type: {content_type}\r\n\r\n'
-        )
-        chunks.extend([header.encode("utf-8"), payload, b"\r\n"])
-    chunks.append(f"--{boundary}--\r\n".encode())
-    return b"".join(chunks), boundary
+    return _core_inspect_wav(path, strict=True)
 
 
 def request_audio(
@@ -184,45 +110,18 @@ def request_audio(
     timeout_s: float = DEFAULT_TIMEOUT_S,
 ) -> bytes:
     """POST one text/voice pair and return the raw ZIP payload."""
-    body, boundary = _multipart_fields(speaker, text, emotion)
-    base = str(config.get("base_url") or "").rstrip("/")
-    endpoint = "/v1/emotion" if emotion is not None else "/v1/clone"
-    url = urlsplit(base + endpoint)
-    if url.scheme not in ("http", "https") or not url.hostname:
-        raise RuntimeError("invalid IndexTTS base_url")
-    request = Request(url.geturl(), data=body, method="POST")
-    request.add_header("Authorization", "Bearer " + str(config.get("token") or ""))
-    request.add_header("Content-Type", "multipart/form-data; boundary=" + boundary)
-    request.add_header("Content-Length", str(len(body)))
-    request.add_header("Connection", "close")
+    text_path = speaker.parent / ".lstest.request.txt"
     try:
-        with urlopen(request, timeout=max(0.1, float(timeout_s))) as response:
-            payload = response.read()
-            if response.status != 200:
-                raise RuntimeError(f"synthesis service returned HTTP {response.status}")
-            if (response.headers.get_content_type() or "") != "application/zip":
-                raise RuntimeError("synthesis service did not return a ZIP payload")
-            return payload
-    except HTTPError as error:
-        raise RuntimeError(f"synthesis service returned HTTP {error.code}") from error
-    except (URLError, socket.timeout) as error:
-        raise RuntimeError(f"synthesis request failed: {error}") from error
+        text_path.write_text(text, encoding="utf-8")
+        return _core_request_audio(config, speaker, emotion, text_path)
+    finally:
+        text_path.unlink(missing_ok=True)
 
 
 def extract_wav(payload: bytes, destination: Path) -> Path:
     """Extract the single WAV inside the service ZIP payload."""
-    with zipfile.ZipFile(BytesIO(payload)) as archive:
-        entries = []
-        for item in archive.infolist():
-            name = item.filename.replace("\\", "/")
-            if name.startswith("/") or ".." in name.split("/") or ":" in name:
-                raise RuntimeError("service ZIP contains an unsafe path")
-            if not item.is_dir() and Path(name).suffix.lower() == ".wav":
-                entries.append(item)
-        if len(entries) != 1:
-            raise RuntimeError(f"service returned {len(entries)} WAV files, expected 1")
-        destination.write_bytes(archive.read(entries[0]))
-    return destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return _core_extract_wav(payload, destination)
 
 
 def synthesize_indextts(
@@ -258,7 +157,7 @@ def synthesize_indextts(
             payload = request_audio(config, speaker, normalized_text, emotion=emotion_path, timeout_s=timeout_s)
             extract_wav(payload, temporary)
             metadata = inspect_wav(temporary)
-            os.replace(temporary, output)
+            shutil.move(str(temporary), str(output))
             return {
                 "case_id": case_id,
                 "text": normalized_text,

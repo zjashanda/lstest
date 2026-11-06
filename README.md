@@ -36,8 +36,6 @@
 - `tests/__init__.py`
 - `tests/test_foundation.py`
 - `tests/test_profile_driven.py`
-- `voices/付小春.wav`
-- `voices/小宁.wav`
 
 ## Install the skill
 
@@ -45,9 +43,10 @@ Copy this folder into:
 
 ```text
 ~/.codex/skills/lstest
+~/.config/opencode/skills/lstest
 ```
 
-Then restart Codex.
+Then restart Codex or OpenCode.
 
 ## Usage and workflow
 
