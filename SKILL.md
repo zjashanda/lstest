@@ -38,11 +38,43 @@ description: 面向新设备项目的通用测试验证与压测框架，提供�
 - 不能只写“后台运行”：后台进程同样可能拥有可见控制台窗口，必须显式抑制窗口。
 - 无法保证不弹窗时，必须停止执行并说明阻塞原因，不得先运行再观察。
 
+## 运行环境与依赖
+
+- Python 3.10+。
+- 安装依赖：
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+- 根目录 `requirements.txt` 指向 `config/requirements.txt`。
+- TTS 依赖 `lstts-core`：
+
+```text
+lstts-core @ git+https://github.com/zjashanda/lstts.git@main
+```
+
+- `lstts` 是 TTS 的唯一来源；更新 `lstts` 后重新安装依赖即可。
+
+## 环境变量
+
+只使用核心密钥环境变量：
+
+| 变量 | 用途 | 来源 |
+|---|---|---|
+| `LSTTS_TTS_TOKEN` | IndexTTS token | lstts |
+| `ACCESS_KEY_ID` | OSS AccessKey ID | skill-git，仅云端音色需要 |
+| `ACCESS_KEY_SECRET` | OSS AccessKey Secret | skill-git，仅云端音色需要 |
+
+- 只使用本地音色时，只需要 `LSTTS_TTS_TOKEN`。
+- 旧变量 `LSTEST_TTS_TOKEN` 仍可读取，优先级低于 `LSTTS_TTS_TOKEN`。
+- URL、超时、endpoint、bucket、prefix 和路径不写环境变量，放在 `~/.lstest/tts.json`、`~/.lstest/oss.json` 或 lstts 的 `references/*.json`。
+
 ## 音频与设备
 
 - `tts` 与 `tts-manifest` 使用 IndexTTS 服务合成并校验 WAV 的时长、响度、静音/削波和 SHA-256；不再使用 edge-tts。
-- 音色取本地音色目录（默认 `~/.lstest/voices/<姓名>.wav`，可用 `LSTEST_VOICE_DIR` 覆盖），再回退到 skill 自带的 `voices/<姓名>.wav`：默认音色 `付小春`，女性音色 `小宁`；也可直接传参考音频路径。
-- 服务地址与 token 依次取 `LSTEST_TTS_URL`/`LSTEST_TTS_TOKEN`、`LSTEST_TTS_CONFIG`、`~/.lstest/tts.json`，或已安装 `index-tts` / `lstts` skill 的 `references/index_tts.json`。
+- 音色优先取本地目录 `~/.lstest/voices/<姓名>.wav`，其次使用 `lstts-core` 内置音色（`付小春`、`小宁`），也可直接传参考音频路径。
+- 服务地址按 `LSTEST_TTS_CONFIG`、`~/.lstest/tts.json`、lstts `references/index_tts.json` 顺序读取；token 由 `LSTTS_TTS_TOKEN` 覆盖。
 - 未指定声卡时使用系统默认 Render；指定稳定设备 key 时严格使用该设备，失败不回退。
 - FFmpeg 只用于音频归一化，Windows 实际播放使用 `pygame`/DirectSound，Linux 使用 `aplay`。
 
