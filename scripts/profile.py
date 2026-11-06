@@ -27,9 +27,11 @@ EVENT_REGISTRY: Mapping[str, Mapping[str, str]] = {
     "online_request": {"key": "REQUEST_ID", "tag": "ONLINE", "label": "在线请求"},
     "online_response": {"key": "RESPONSE_ID", "tag": "ONLINE", "label": "在线响应"},
     "online_result": {"key": "ONLINE_ASR", "tag": "ONLINE", "label": "在线"},
+    "online_intent": {"key": "ONLINE_INTENT", "tag": "ONLINE", "label": "在线意图"},
     "player_url": {"key": "PLAY_URL", "tag": "PLAYER", "label": "播放地址"},
     "player_id": {"key": "DEVICE_BROADCAST_ID", "tag": "PLAYER", "label": "设备播报"},
     "player_state": {"key": "PLAYER", "tag": "PLAYER", "label": "播放器"},
+    "player_control_action": {"key": "PLAYER_CONTROL", "tag": "PLAYER", "label": "播放控制"},
     "initialization_ready": {"key": "INIT_READY", "tag": "SYSTEM", "label": "初始化"},
     "restart": {"key": "RESTART", "tag": "SYSTEM", "label": "重启"},
     "command_ack": {"key": "COMMAND_ACK", "tag": "COMMAND", "label": "命令回执"},
@@ -69,6 +71,7 @@ class ProfileFact:
     key: str
     tag: str
     presentation_value: str
+    display_fields: tuple[tuple[str, str], ...]
     captures: Mapping[str, str]
     source: str
     port: str
@@ -357,6 +360,26 @@ class DeviceProfile:
             presentation_capture = str(rule.get("presentation_capture") or "").strip()
             if presentation_capture not in compiled.groupindex:
                 raise ProfileError(f"{location} presentation_capture must name a regex capture")
+            display_captures = rule.get("display_captures", [])
+            if display_captures in (None, ""):
+                display_captures = []
+            if not isinstance(display_captures, list):
+                raise ProfileError(f"{location}.display_captures must be a list")
+            display_tags: set[str] = set()
+            for display_index, display in enumerate(display_captures):
+                display_location = f"{location}.display_captures[{display_index}]"
+                if not isinstance(display, Mapping):
+                    raise ProfileError(f"{display_location} must be an object")
+                tag_name = str(display.get("tag_name") or "").strip()
+                capture = str(display.get("capture") or "").strip()
+                if not tag_name or not capture:
+                    raise ProfileError(f"{display_location} requires tag_name and capture")
+                if capture not in compiled.groupindex:
+                    raise ProfileError(f"{display_location} capture must name a regex capture")
+                normalized_tag = tag_name.casefold()
+                if normalized_tag in display_tags:
+                    raise ProfileError(f"{display_location} duplicates display tag: {tag_name}")
+                display_tags.add(normalized_tag)
             source = rule.get("sources", {})
             if source and not isinstance(source, Mapping):
                 raise ProfileError(f"{location}.sources must be an object")
@@ -401,6 +424,18 @@ class DeviceProfile:
                     text = str(sample.get("text", "")) if isinstance(sample, Mapping) else str(sample)
                     if compiled.search(text):
                         raise ProfileError(f"{location} negative fixture matches")
+                for sample in positive:
+                    if not isinstance(sample, Mapping) or not isinstance(sample.get("display"), Mapping):
+                        continue
+                    match = compiled.search(str(sample.get("text", "")))
+                    if match is None:
+                        continue
+                    captures = {name: str(value or "") for name, value in match.groupdict().items()}
+                    for display in display_captures:
+                        tag_name = str(display.get("tag_name"))
+                        capture = str(display.get("capture"))
+                        if tag_name in sample["display"] and str(sample["display"][tag_name]) != captures[capture]:
+                            raise ProfileError(f"{location} positive fixture display does not match: {tag_name}")
         safety = payload.get("safety_stop", [])
         if safety and not isinstance(safety, list):
             raise ProfileError("safety_stop must be a list")
@@ -573,6 +608,14 @@ class DeviceProfile:
             captures = {name: str(value or "") for name, value in match.groupdict().items()}
             presentation_capture = str(rule["presentation_capture"])
             presentation_value = captures[presentation_capture]
+            raw_display = rule.get("display_captures", [])
+            display_fields = tuple(
+                (str(item["tag_name"]), captures[str(item["capture"])])
+                for item in raw_display
+                if isinstance(item, Mapping)
+            )
+            if not display_fields:
+                display_fields = ((EVENT_REGISTRY[str(rule["event_type"])]["key"], presentation_value),)
             event_type = str(rule["event_type"])
             registry = EVENT_REGISTRY[event_type]
             correlation = rule.get("correlation", {})
@@ -583,6 +626,7 @@ class DeviceProfile:
                 key=registry["key"],
                 tag=registry["tag"],
                 presentation_value=presentation_value,
+                display_fields=display_fields,
                 captures=captures,
                 source=record.source,
                 port=record.port,

@@ -4,6 +4,7 @@
 
 ## Skill layout
 
+- `SKILL.md`
 - `agents/openai.yaml`
 - `config/profile.example.json`
 - `config/requirements.txt`
@@ -20,23 +21,29 @@
 - `scripts/adapter_guard.py`
 - `scripts/audio_synthesis.py`
 - `scripts/core.py`
+- `scripts/environment_cleanup.py`
 - `scripts/install_laid_linux.sh`
 - `scripts/install_laid_windows.ps1`
+- `scripts/interaction_acceptance.py`
 - `scripts/listenai_play.py`
 - `scripts/lstest.py`
 - `scripts/observations.py`
 - `scripts/playback.py`
 - `scripts/profile.py`
+- `scripts/result_stats.py`
 - `scripts/runtime.py`
 - `scripts/serial_capture.py`
+- `scripts/serial_recovery.py`
 - `scripts/shell.py`
 - `scripts/smoke.py`
 - `scripts/timeline.py`
 - `scripts/timing.py`
-- `SKILL.md`
 - `tests/__init__.py`
+- `tests/test_environment_cleanup.py`
 - `tests/test_foundation.py`
+- `tests/test_long_run_cleanup.py`
 - `tests/test_profile_driven.py`
+- `tests/test_result_stats.py`
 
 ## Install the skill
 
