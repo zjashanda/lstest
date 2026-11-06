@@ -54,7 +54,24 @@ python -m pip install -r requirements.txt
 lstts-core @ git+https://github.com/zjashanda/lstts.git@main
 ```
 
-- `lstts` 是 TTS 的唯一来源；更新 `lstts` 后重新安装依赖即可。
+- `lstts` 是 TTS 的唯一来源。lstest 不复制 TTS 实现。
+
+## 更新 lstts
+
+更新 `lstts` 仓库后，在 lstest 使用的 venv 中执行：
+
+```powershell
+pip install -U --force-reinstall --no-cache-dir "lstts-core @ git+https://github.com/zjashanda/lstts.git@main"
+```
+
+- 不需要修改 lstest 代码。
+- 多个 Skill 共用 venv 时执行一次即可。
+- 固定版本时把 `@main` 换成对应 tag，例如 `@v1.0.0`。
+- 检查版本：
+
+```powershell
+python -c "import lstts_core; print(lstts_core.__version__)"
+```
 
 ## 环境变量
 
