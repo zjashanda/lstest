@@ -135,7 +135,7 @@ python -c "import lstts_core; print(lstts_core.__version__)"
 
 ## 音频与设备
 
-- `tts` 与 `tts-manifest` 使用 IndexTTS 服务合成并校验 WAV 的时长、响度、静音/削波和 SHA-256；不再使用 edge-tts。
+- `tts` 与 `tts-manifest` 使用 lstts（IndexTTS）服务合成并校验 WAV 的时长、响度、静音/削波和 SHA-256；lstts 是本 skill 唯一的合成通道，不依赖任何本地或在线旧 TTS 引擎。
 - 音色优先取本地目录 `~/.lstest/voices/<姓名>.wav`，其次使用 `lstts-core` 内置音色（`付小春`、`小宁`），也可直接传参考音频路径。
 - 服务地址按 `LSTEST_TTS_CONFIG`、`~/.lstest/tts.json`、lstts `references/index_tts.json` 顺序读取；token 由 `LSTTS_TTS_TOKEN` 覆盖。
 - 未指定声卡时使用系统默认 Render；指定稳定设备 key 时严格使用该设备，失败不回退。
