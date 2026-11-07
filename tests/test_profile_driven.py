@@ -81,6 +81,68 @@ class ProfileDrivenTests(unittest.TestCase):
                 self.assertEqual(summary["status"], "PASS")
                 self.assertEqual(ToolLogValidator().validate_run(artifacts.run_dir), [])
 
+    def test_profile_display_captures_render_raw_fields_in_declared_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = profile_payload("multi-display", "intent", "marker")
+            payload["event_rules"][0]["regex"] = r"keyword=(?P<keyword>[^\s]+) intent=(?P<intent>[^\s]+)"
+            payload["event_rules"][0]["presentation_capture"] = "intent"
+            payload["event_rules"][0]["display_captures"] = [
+                {"tag_name": "keyword", "capture": "keyword"},
+                {"tag_name": "intent", "capture": "intent"},
+            ]
+            payload["event_rules"][0]["fixtures"]["positive"] = [{
+                "text": "keyword=xiao_t intent=open_ac", "source": "serial", "presentation": "open_ac",
+                "display": {"keyword": "xiao_t", "intent": "open_ac"},
+            }]
+            profile = self._profile(root, payload)
+            artifacts = TaskArtifacts(root, "multi-display")
+            runtime = ScenarioRuntime(artifacts, profile=profile)
+            case = CaseSpec("case", metadata={"timeline": {"required_facts": ["OFFLINE_ASR"]}})
+            runtime.freeze_cases([case], profile_version=profile.schema_version, profile_sha256=profile.sha256)
+            runtime.open_case_window("case")
+            facts = runtime.submit_raw_record(
+                RawLogRecord(text="keyword=xiao_t intent=open_ac", source="serial"), case_id="case",
+            )
+            self.assertEqual(facts[0].display_fields, (("keyword", "xiao_t"), ("intent", "open_ac")))
+            artifacts.record_case(CaseResult("case", "PASS"))
+            artifacts.finalize("PASS", "fixture")
+            tool = artifacts.tool_log_path.read_text(encoding="utf-8")
+            self.assertLess(tool.index("keyword: xiao_t"), tool.index("intent: open_ac"))
+            self.assertNotIn("OFFLINE_ASR: open_ac", tool)
+
+    def test_profile_rejects_missing_or_duplicate_display_capture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing = profile_payload("bad-display-missing", "capture", "marker")
+            missing["event_rules"][0]["display_captures"] = [{"tag_name": "keyword", "capture": "not_a_capture"}]
+            with self.assertRaisesRegex(Exception, "display_captures"):
+                self._profile(root, missing)
+            duplicate = profile_payload("bad-display-duplicate", "capture", "marker")
+            duplicate["event_rules"][0]["display_captures"] = [
+                {"tag_name": "keyword", "capture": "capture"},
+                {"tag_name": "keyword", "capture": "capture"},
+            ]
+            with self.assertRaisesRegex(Exception, "duplicates display tag"):
+                self._profile(root, duplicate)
+
+    def test_missing_required_profile_fact_has_empty_line_and_one_failed_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = self._profile(root, profile_payload("missing-fact", "capture", "marker"))
+            artifacts = TaskArtifacts(root, "missing-fact")
+            runtime = ScenarioRuntime(artifacts, profile=profile)
+            case = CaseSpec("case", metadata={"timeline": {"required_facts": ["OFFLINE_ASR"]}})
+            runtime.freeze_cases([case], profile_version=profile.schema_version, profile_sha256=profile.sha256)
+            runtime.open_case_window("case")
+            artifacts.record_case(CaseResult("case", "PASS", reason="fixture"))
+            summary = artifacts.finalize("PASS", "fixture")
+            tool = artifacts.tool_log_path.read_text(encoding="utf-8")
+            self.assertIn("OFFLINE_ASR:", tool)
+            self.assertIn("缺少必需事实 OFFLINE_ASR", tool)
+            self.assertEqual(tool.count("[RESULT] 本轮="), 1)
+            self.assertEqual(summary["status"], "FAIL")
+
     def test_formal_runtime_rejects_legacy_fact_api(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
