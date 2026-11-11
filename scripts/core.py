@@ -49,12 +49,23 @@ def now_dt() -> datetime:
     return datetime.now(BEIJING)
 
 
+# 时间契约（ark-kb docs/time-contract.md）：记录层文本统一为北京时间、空格分隔、
+# 秒级；文件名戳用连字符。不输出 T 分隔、Z 后缀、数字时区偏移或小数秒。
+FMT_TEXT = "%Y-%m-%d %H:%M:%S"
+FMT_STAMP = "%Y%m%d-%H%M%S"
+
+
+def now_text() -> str:
+    return now_dt().strftime(FMT_TEXT)
+
+
 def now_iso() -> str:
-    return now_dt().isoformat(timespec="milliseconds")
+    """历史函数名保留：返回契约文本时间，不再输出 ISO 8601 形式。"""
+    return now_text()
 
 
 def now_human() -> str:
-    return now_dt().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    return now_text()
 
 
 def sha256_file(path: Path) -> str:
@@ -336,7 +347,7 @@ class TaskArtifacts:
             self.run_dir = Path(result_root) / run_name
             self.run_dir.mkdir(parents=True, exist_ok=True)
         else:
-            stamp = now_dt().strftime("%Y%m%d_%H%M%S")
+            stamp = now_dt().strftime(FMT_STAMP)
             base = Path(result_root) / f"{stamp}_{task_slug}"
             candidate = base
             suffix = 1

@@ -39,7 +39,8 @@ MANIFEST_FIELDS = [
 
 
 def now_iso() -> str:
-    return datetime.now(BEIJING).isoformat(timespec="milliseconds")
+    """契约文本时间：北京时间、空格分隔、秒级（历史函数名保留）。"""
+    return datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def sha256_file(path: Path) -> str:

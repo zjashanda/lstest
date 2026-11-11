@@ -528,7 +528,7 @@ class TimelineLedger:
 class ToolLogValidator:
     """Validate the stable format produced by :class:`TimelineLedger`."""
 
-    LINE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \[([A-Z]+)(?: \d+/(?:\d+|-))?\] .+$")
+    LINE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{3})? \[([A-Z]+)(?: \d+/(?:\d+|-))?\] .+$")
 
     def validate_lines(self, lines) -> list[str]:
         errors: list[str] = []
