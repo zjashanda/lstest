@@ -114,11 +114,47 @@ python -c "import lstts_core; print(lstts_core.__version__)"
 - 未指定声卡时使用系统默认 Render；指定稳定设备 key 时严格使用该设备，失败不回退。
 - FFmpeg 只用于音频归一化，Windows 实际播放使用 `pygame`/DirectSound，Linux 使用 `aplay`。
 
+## 设备文档接入（`--device-snapshot`）
+
+设备事实的唯一来源是 `device-io`。lstest 不枚举 USB、不扫描串口、不猜 COM 号，只读取 `device-io` 产出的 JSON。`preflight`、`init`、`smoke` 都支持可选参数：
+
+```powershell
+python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --device-snapshot device-role-map.json
+```
+
+接受两种文档，按顶层 `schema` 分派：
+
+| schema | 产出命令 | 解析方式 |
+|---|---|---|
+| `ark.device-role-map.v1` | `device-io roles --spec spec.json --format json --save FILE` | 取 `roles[role].port`；`state` 为 `resolved`/`pinned` 才接受 |
+| `ark.device-io.v1` | `device-io ports --format json --out FILE` | 用 profile 已声明的端口名/接口标签与 `ports[].device`/`ports[].interface` 做大小写不敏感**精确相等**匹配 |
+
+优先级与覆盖语义：
+
+- 给了 `--device-snapshot`：profile `ports[]` 里声明的每个 role 都必须由该文档解析出端口，并覆盖 profile 中该 role 的端口；`--port` 显式给出的同 role 端口也会被替换，其余参数（波特率、能力）保持原样。
+- 没给：行为与既有版本完全一致，仍然使用 `--port` / profile 里的端口，不读取任何设备文档。
+- 解析失败一律硬失败，**绝不静默回落到 profile 或 `--port`**：role 缺失、`ambiguous`（多条命中）、`conflict`、`missing`、顶层 `ok: false`、schema 不支持都按 `BLOCKED` 处理，往 stderr 输出一行 JSON 错误（含 role、state、reason），退出码 `2`（本仓既有 `BLOCKED` 约定）。成功路径退出码 `0`。
+
+`preflight` 成功时在原有字段之外增加结构化块，不打印整份 snapshot：
+
+```json
+"device_snapshot": {
+  "source": "<文档绝对路径>",
+  "schema": "ark.device-role-map.v1",
+  "generated_at": "2026-11-11 17:50:00",
+  "mode": "role-map",
+  "roles": {"ap": {"state": "resolved", "port": "COM21", "reason": "only serial port on the selected board"}}
+}
+```
+
+`mode` 取 `role-map` 或 `snapshot`。`init`/`smoke` 同样在给出该参数时打印 `{"status": ..., "device_snapshot": ...}`。
+
 ## 常用命令
 
 ```powershell
 python -u lstest/scripts/lstest.py --help
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json>
+python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --device-snapshot <device-role-map.json>
 python -u lstest/scripts/lstest.py tts --text-file utterance.txt --voice 付小春 --output audio/sample.wav
 python -u lstest/scripts/lstest.py audio scan --direction Render --json
 ```

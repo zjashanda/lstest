@@ -21,6 +21,7 @@ try:
         DEFAULT_VOICE, load_text_manifest, synthesize_indextts, synthesize_manifest,
     )
     from .core import ConnectionSpec
+    from .device_snapshot import DeviceSnapshot, load_device_snapshot
     from .profile import DeviceProfile, ProfileError
     from .smoke import run_smoke
 except ImportError:
@@ -28,6 +29,7 @@ except ImportError:
         DEFAULT_VOICE, load_text_manifest, synthesize_indextts, synthesize_manifest,
     )
     from core import ConnectionSpec
+    from device_snapshot import DeviceSnapshot, load_device_snapshot
     from profile import DeviceProfile, ProfileError
     from smoke import run_smoke
 
@@ -41,6 +43,55 @@ def parse_ports(values: list[str], baudrate: int) -> list[dict[str, object]]:
         if not port:
             raise ValueError("port cannot be empty")
         result.append({"port": port, "role": role, "baudrate": baudrate})
+    return result
+
+
+def declared_role_labels(profile: DeviceProfile) -> dict[str, tuple[str, ...]]:
+    """profile 里每个 role 已声明的端口名/接口标签，供 raw snapshot 精确匹配。"""
+    required: dict[str, tuple[str, ...]] = {}
+    for entry in profile.ports:
+        role = str(entry.get("role") or "").strip()
+        if not role:
+            continue
+        required[role] = tuple(
+            label for label in (
+                str(entry.get("port") or "").strip(),
+                str(entry.get("interface") or "").strip(),
+            ) if label
+        )
+    return required
+
+
+def apply_device_snapshot(
+    ports: list[dict[str, object]],
+    profile: DeviceProfile,
+    snapshot: DeviceSnapshot,
+    default_baudrate: int,
+) -> list[dict[str, object]]:
+    """用文档解析出的端口覆盖 profile 里同 role 的端口；未声明的 role 不动。"""
+    result = [dict(item) for item in ports]
+    by_role = {item.get("role"): item for item in result if item.get("role")}
+    for entry in profile.ports:
+        role = str(entry.get("role") or "").strip()
+        if not role:
+            continue
+        port = snapshot.port_for(role)
+        existing = by_role.get(role)
+        if existing is not None:
+            existing["port"] = port
+            continue
+        baudrate = int(entry.get("baudrate") or 0) or default_baudrate
+        if baudrate <= 0:
+            raise ValueError(f"--baudrate must be positive for role '{role}': profile port declares no baudrate")
+        item: dict[str, object] = {
+            "port": port,
+            "role": role,
+            "baudrate": baudrate,
+            "capabilities": [str(value) for value in entry.get("capabilities", ())],
+            "required_for": [str(value) for value in entry.get("required_for", ())],
+        }
+        result.append(item)
+        by_role[role] = item
     return result
 
 
@@ -104,6 +155,10 @@ def parser() -> argparse.ArgumentParser:
     pre.add_argument("--baudrate", type=int, default=0)
     pre.add_argument("--playback-device-key")
     pre.add_argument("--result-root", type=Path, default=Path("result"))
+    pre.add_argument(
+        "--device-snapshot", type=Path,
+        help="device-io 产出的 snapshot/role-map JSON，指定后端口全部来自该文档",
+    )
     for name in ("init", "smoke"):
         command = sub.add_parser(name, help="执行基础初始化 smoke")
         command.add_argument("--profile", type=Path, required=True)
@@ -113,6 +168,10 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--capture-device-key")
         command.add_argument("--result-root", type=Path, default=Path("result"))
         command.add_argument("--hardware", action="store_true", help="允许打开串口和播放设备")
+        command.add_argument(
+            "--device-snapshot", type=Path,
+            help="device-io 产出的 snapshot/role-map JSON，指定后端口全部来自该文档",
+        )
     return value
 
 
@@ -190,12 +249,24 @@ def main(argv: list[str] | None = None) -> int:
             return run_audio_tool(args)
         if args.baudrate <= 0 and args.port:
             raise ValueError("--baudrate must be positive when ports are supplied")
-        connection = ConnectionSpec.from_mapping({"ports": parse_ports(args.port, args.baudrate) if args.port else [], "playback_device_key": args.playback_device_key, "capture_device_key": getattr(args, "capture_device_key", None), "profile_id": str(args.profile), "result_root": str(args.result_root)})
+        ports = parse_ports(args.port, args.baudrate) if args.port else []
         profile = DeviceProfile.load(args.profile)
+        snapshot_block = None
+        snapshot_path = getattr(args, "device_snapshot", None)
+        if snapshot_path is not None:
+            snapshot = load_device_snapshot(snapshot_path, declared_role_labels(profile))
+            ports = apply_device_snapshot(ports, profile, snapshot, args.baudrate)
+            snapshot_block = snapshot.to_dict()
+        connection = ConnectionSpec.from_mapping({"ports": ports, "playback_device_key": args.playback_device_key, "capture_device_key": getattr(args, "capture_device_key", None), "profile_id": str(args.profile), "result_root": str(args.result_root)})
         if args.command == "preflight":
-            print(json.dumps({"status": "PASS", "profile_id": profile.profile_id, "profile_sha256": profile.sha256, "connection": connection.to_dict()}, ensure_ascii=False, indent=2))
+            payload = {"status": "PASS", "profile_id": profile.profile_id, "profile_sha256": profile.sha256, "connection": connection.to_dict()}
+            if snapshot_block is not None:
+                payload["device_snapshot"] = snapshot_block
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
         summary = run_smoke(connection, args.profile, hardware=args.hardware)
+        if snapshot_block is not None:
+            print(json.dumps({"status": summary.get("status"), "device_snapshot": snapshot_block}, ensure_ascii=False, indent=2))
         return 0 if summary["status"] in {"PASS", "WARN"} else 2
     except (ValueError, ProfileError, RuntimeError, OSError) as error:
         print(json.dumps({"status": "BLOCKED", "reason": str(error)}, ensure_ascii=False), file=sys.stderr)

@@ -32,6 +32,7 @@
 - `scripts/audio_synthesis.py`
 - `scripts/core.py`
 - `scripts/coverage.py`
+- `scripts/device_snapshot.py`
 - `scripts/environment_cleanup.py`
 - `scripts/install_laid_linux.sh`
 - `scripts/install_laid_windows.ps1`
@@ -54,6 +55,7 @@
 - `tests/test_assertions.py`
 - `tests/test_attribution.py`
 - `tests/test_coverage.py`
+- `tests/test_device_snapshot.py`
 - `tests/test_environment_cleanup.py`
 - `tests/test_foundation.py`
 - `tests/test_long_run_cleanup.py`

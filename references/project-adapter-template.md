@@ -18,5 +18,8 @@
 ```powershell
 python -m pytest -q tests
 python -u <project-skill>/scripts/run.py --preflight
+python -u <project-skill>/scripts/run.py --preflight --device-snapshot <device-role-map.json>
 python -u <project-skill>/scripts/run.py --replay fixtures/<project>-profile-fixtures.json
 ```
+
+`--device-snapshot` 指向 `device-io` 产出的 `ark.device-role-map.v1` 或 `ark.device-io.v1` 文档；profile `ports[]` 中的每个 role 都必须能从该文档解析，否则 preflight 以退出码 `2` 失败。不传时沿用 profile 端口。
