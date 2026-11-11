@@ -23,6 +23,25 @@ description: 面向新设备项目的通用测试验证与压测框架，提供�
 - 每个活动 case 中到达的事实都立即按顺序显示，包括播报前与异常后；每轮只有一次 `[RESULT]`。必需而缺失的事实在轮末以空值行补齐。
 - 结果目录仅保留 `serial_logs/*.log`、`tool.log`、`results.csv`、`cases.csv`。禁止 `.bin`、`task.log`、`tool_logs`、JSONL 和临时结果文件。
 
+## 新 canonical 分层（profile / case / adapter）
+
+lstest 是测试与语音的**唯一 canonical**。项目差异一律落在数据层，禁止沉淀进公共引擎：
+
+| 层 | 目录 | 内容 | 禁止 |
+|---|---|---|---|
+| 项目差异 | `profiles/<project>/profile.json` | 端口、marker 正则、命名捕获、fixture、覆盖策略、能力声明、溯源 | 不得写进 `scripts/` |
+| 用例期望 | `cases/`（`packs/`、`examples/`、`fa2/`） | 声明式断言、case 元数据、溯源 | 不得是 Python 代码 |
+| 原始记录适配 | `adapters/<project>/` | 只采集原始行并提交 `RawLogRecord`、声明 case 计划 | 不得解析、不得写 `tool.log`、不得复制引擎 |
+| 测试方法知识 | `docs/voice-validation/` | 方法、验证包、失败模式、项目知识、intake 模板 | 不得替代 profile 合同 |
+
+断言、归因、覆盖是框架能力，但**期望值必须来自 `cases/`**：
+
+- `scripts/assertions.py` 提供通用规则（`event_exists`、`event_within_ms`、`event_order`、`event_absent`、`event_not_during`、`sequence`、`duration`、`response`、`count_range`、`state_required`、`no_reboot`）。缺时间戳的时序规则只能是 `SKIP`，不得判 `PASS`。
+- `scripts/attribution.py` 从事实序列构图并归因失败；项目私有因果规则通过参数传入，不写死在引擎。
+- `scripts/coverage.py` 按 profile 的端口能力与 `coverage_policy` 判定 `BLOCKED` / `COVERAGE_DEGRADED`，禁止按项目名推断能力。
+
+profile 的 `contract_mode` 只有 `formal` 才能用于正式压测。没有真实日志支撑的项目必须保持 `draft` 且 `provenance.verified: false`；fixture 只能是文档 marker 派生的合成样本，不得声称是真机抓取。
+
 ## 异常与停止
 
 每个动作、回调和 case 都必须捕获异常，记录证据、完成当前轮收尾并继续下一可执行轮。初始化/日志等级重试耗尽、识别失败、超时、重复结果、播放器失败、设备业务错误和单条解析异常都不是任务自动退出理由。

@@ -1,0 +1,50 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-half-duplex",
+  "title": "半双工识别",
+  "profile": "cskwb01",
+  "stage": "duplex",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "COMMAND_ACK"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "half_duplex",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/half_duplex.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "wake_before_command",
+      "kind": "event_order",
+      "before": "WAKE",
+      "after": "COMMAND_ACK"
+    },
+    {
+      "name": "command_ack_present",
+      "kind": "event_exists",
+      "event_type": "COMMAND_ACK"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：半双工下唤醒后命令可识别，播报中不允许的输入不能被当作命令失败。",
+    "原文：半双工配置成功和半双工识别成功分开判断。",
+    "half_duplex_timeout_s=15 是执行配置，源任务未把它声明为断言阈值，因此不填数值。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/half_duplex.example.json"
+  ]
+}

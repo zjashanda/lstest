@@ -1,0 +1,64 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-control-command-full-chain",
+  "title": "控制命令完整链路",
+  "profile": "cskwb01",
+  "stage": "command",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "COMMAND_EVIDENCE",
+        "RESPONSE_ID",
+        "COMMAND_ACK"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "control_command_full_chain",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/control_command_full_chain.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "command_evidence_present",
+      "kind": "event_exists",
+      "event_type": "COMMAND_EVIDENCE"
+    },
+    {
+      "name": "response_present",
+      "kind": "event_exists",
+      "event_type": "RESPONSE_ID"
+    },
+    {
+      "name": "wake_before_command",
+      "kind": "event_order",
+      "before": "WAKE",
+      "after": "COMMAND_ACK"
+    },
+    {
+      "name": "command_before_response",
+      "kind": "event_order",
+      "before": "COMMAND_ACK",
+      "after": "RESPONSE_ID"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：控制命令完整链路验证：先唤醒再播放控制命令，并把 recognition/control_reply/tts_response/actuator_feedback 四段分开断言。",
+    "原文：蜂鸣器只在状态变化类控制命令中作为 expected_if_state_changes；no-op/查询/不支持不强制蜂鸣。",
+    "原文：无明确蜂鸣器 marker：actuator_feedback UNKNOWN，不伪造 PASS。",
+    "actuator_feedback 段在当前事件注册表中没有对应 key，因此只用 notes 记录，不写成事件断言。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/control_command_full_chain.example.json"
+  ]
+}

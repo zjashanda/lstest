@@ -1,0 +1,39 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-continuous-wake",
+  "title": "连续唤醒稳定性",
+  "profile": "cskwb01",
+  "stage": "wake",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "continuous_wake",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/continuous_wake.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "multiple_wakes",
+      "kind": "count_range",
+      "event_type": "WAKE",
+      "min": 2
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：连续唤醒稳定性小样本：连续多轮播放唤醒词，区分识别失败与重启/日志中断。",
+    "原文：串口端口打不开或日志静默：BLOCKED，归因到 logger/端口占用/接线。",
+    "“连续多轮”按至少 2 次 WAKE 断言，源任务未给出轮次上限，因此不填 max。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/continuous_wake.example.json"
+  ]
+}

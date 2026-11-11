@@ -1,0 +1,42 @@
+{
+  "schema": "lstest.parity_scenario.v1",
+  "name": "order_broken_fail",
+  "description": "识别先于唤醒到达：event_order / sequence 的 FAIL 侧，同时验证因果图在顺序不成立时不产生边（SET:0 两侧一致）。",
+  "facts": [
+    {"event_type": "OFFLINE_ASR", "source": "ap", "role": "ap", "port": "COM14", "sequence": 1, "ts_ms": 0, "captures": {"text": "打开空调"}},
+    {"event_type": "WAKE", "source": "ap", "role": "ap", "port": "COM14", "sequence": 2, "ts_ms": 600}
+  ],
+  "checks": [
+    {
+      "name": "wake_before_asr",
+      "kind": "event_order",
+      "before": "WAKE",
+      "after": "OFFLINE_ASR",
+      "polaris": {"primitive": "assert_event_order", "args": {"before": "WakeDetected", "after": "ASRDetected"}}
+    },
+    {
+      "name": "ordered_chain_broken",
+      "kind": "sequence",
+      "steps": ["WAKE", "OFFLINE_ASR"],
+      "polaris": {"primitive": "assert_sequence", "args": {"chain": "WakeDetected->ASRDetected", "within_ms": 100000}}
+    },
+    {
+      "name": "attribution_no_edge_when_reversed",
+      "kind": "attribution_graph",
+      "rules": [
+        {"from": "WAKE", "to": ["OFFLINE_ASR"], "relation": "trigger", "within_ms": 3000, "require_order": true}
+      ],
+      "polaris": {
+        "primitive": "build_event_graph",
+        "args": {
+          "rules": [
+            {"id": "wake_to_asr", "relation": "trigger", "within_ms": 3000, "src": {"event_types": ["WakeDetected"]}, "dst": {"event_types": ["ASRDetected"]}}
+          ]
+        }
+      }
+    }
+  ],
+  "notes": [
+    "WAKE 在 600ms 而识别在 0ms，require_order 使两侧都不建边，因此图对照的观测集合都是空集。"
+  ]
+}

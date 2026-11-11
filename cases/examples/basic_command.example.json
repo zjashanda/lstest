@@ -1,0 +1,52 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-basic-command",
+  "title": "基础命令词识别",
+  "profile": "cskwb01",
+  "stage": "command",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "COMMAND_ACK",
+        "COMMAND_EVIDENCE",
+        "OFFLINE_ASR"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "basic_command",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/basic_command.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_before_command",
+      "kind": "event_order",
+      "before": "WAKE",
+      "after": "COMMAND_ACK"
+    },
+    {
+      "name": "command_evidence_present",
+      "kind": "event_exists",
+      "event_type": "COMMAND_EVIDENCE"
+    },
+    {
+      "name": "offline_recognition_present",
+      "kind": "event_exists",
+      "event_type": "OFFLINE_ASR"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：每条命令词应输出唤醒、ASR 或命令关键词闭环证据。",
+    "原文：未唤醒：唤醒链路问题，不能直接判命令词失败。",
+    "输入命令词文件为 docs/fa2命令词.txt，来源任务只跑 command_limit=20 条，不重跑 343 条全集。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/basic_command.example.json"
+  ]
+}

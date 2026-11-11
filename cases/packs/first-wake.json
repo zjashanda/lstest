@@ -1,0 +1,46 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-pack-first-wake",
+  "title": "首次唤醒验证包",
+  "profile": "cskwb01",
+  "stage": "wake",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "HOST_AUDIO_START"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "first-wake",
+      "path": "docs/wiki/voice-validation/packs/first-wake.md",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_marker_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "audio_start_before_wake",
+      "kind": "event_order",
+      "before": "HOST_AUDIO_START",
+      "after": "WAKE"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：播放返回 0；窗口内出现 wake marker；无 reboot/crash。",
+    "原文：首次唤醒率 = 首次唤醒成功次数 / 首次唤醒有效总次数 * 100%。",
+    "原文：播放锚点优先使用有效音频起点；长播放或临界超时无法确认时标记 TIMING_AMBIGUOUS。",
+    "源包只说“窗口内”，未给出唤醒时延毫秒阈值，因此 event_order 只断言先后，不填 max_ms。",
+    "来源：docs/wiki/voice-validation/packs/first-wake.md"
+  ]
+}

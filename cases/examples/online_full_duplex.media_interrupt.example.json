@@ -1,0 +1,51 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-online-full-duplex-media-interrupt",
+  "title": "在线全双工媒体打断（FD-004）",
+  "profile": "cskwb01",
+  "stage": "duplex",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "PLAYER",
+        "WAKE"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "online_full_duplex.media_interrupt",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/online_full_duplex.media_interrupt.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "media_window_present",
+      "kind": "event_exists",
+      "event_type": "PLAYER"
+    },
+    {
+      "name": "media_before_wake",
+      "kind": "event_order",
+      "before": "PLAYER",
+      "after": "WAKE"
+    },
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：必须先证明存在 TTS/media 自播窗口，再判断窗口内注入语音是否按需求识别或打断。",
+    "原文：media_or_tts_window observed before injection。",
+    "原文：注入点不在自播窗口：TIMING_AMBIGUOUS。",
+    "源任务未给出窗口毫秒边界，因此只断言 PLAYER 先于 WAKE，不断言注入时刻数值。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/online_full_duplex.media_interrupt.example.json"
+  ]
+}

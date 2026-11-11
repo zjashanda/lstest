@@ -1,0 +1,49 @@
+{
+  "schema": "lstest.parity_scenario.v1",
+  "name": "missing_events_fail",
+  "description": "只有命令回执且发生重启：event_exists / event_order / count_range / state_required / no_reboot 的 FAIL 侧。",
+  "facts": [
+    {"event_type": "COMMAND_ACK", "source": "ap", "role": "ap", "port": "COM14", "sequence": 1, "ts_ms": 500, "captures": {"skill": "DeviceControl"}},
+    {"event_type": "RESTART", "polaris_event_type": "RebootDetected", "source": "ap", "role": "ap", "port": "COM14", "sequence": 2, "ts_ms": 900, "captures": {"reason": "watchdog"}}
+  ],
+  "checks": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE",
+      "min_count": 1,
+      "polaris": {"primitive": "assert_event_exists", "args": {"event_type": "WakeDetected", "min_count": 1}}
+    },
+    {
+      "name": "wake_before_asr",
+      "kind": "event_order",
+      "before": "WAKE",
+      "after": "OFFLINE_ASR",
+      "polaris": {"primitive": "assert_event_order", "args": {"before": "WakeDetected", "after": "ASRDetected"}}
+    },
+    {
+      "name": "wake_count",
+      "kind": "count_range",
+      "event_type": "WAKE",
+      "min": 1,
+      "max": 2,
+      "polaris": {"primitive": "assert_count_range", "args": {"event_type": "WakeDetected", "min": 1, "max": 2}}
+    },
+    {
+      "name": "player_active_state",
+      "kind": "state_required",
+      "event_type": "PLAYER",
+      "state_class": "active",
+      "polaris": {"primitive": "state_expected", "args": {"token": "PLAYER_ACTIVE"}}
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot",
+      "polaris": {"primitive": "assert_no_runtime_reboot", "args": {}}
+    }
+  ],
+  "notes": [
+    "count_range 的 Polaris 侧由 assert_event_exists(min) + assert_no_event_exists(超出部分) 组合，再由 Polaris aggregate_result 给出结论。",
+    "RESTART 事件的 raw 不含 setup/recovery 标记，因此两侧都把这次重启算作运行期重启。"
+  ]
+}

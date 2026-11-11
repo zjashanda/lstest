@@ -1,0 +1,45 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-online-full-duplex-timeout-boundary",
+  "title": "在线全双工超时边界（FD-005/FD-006）",
+  "profile": "cskwb01",
+  "stage": "duplex",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "ONLINE_ASR"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "online_full_duplex.timeout_boundary",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/online_full_duplex.timeout_boundary.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "online_asr_present",
+      "kind": "event_exists",
+      "event_type": "ONLINE_ASR"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：超时后语音应按窗口外处理；落入 guard 区的样本只输出证据，不强判固件。",
+    "原文：session_timeout observed or inferred。",
+    "原文：guard_window samples marked TIMING_AMBIGUOUS。",
+    "事件注册表中没有 session_timeout key，且 guard 内不强判，因此本用例只断言唤醒/在线识别证据与无重启，不把超时数字写成断言。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/online_full_duplex.timeout_boundary.example.json"
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-random-interval-wake",
+  "title": "随机间隔唤醒",
+  "profile": "cskwb01",
+  "stage": "wake",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "random_interval_wake",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/random_interval_wake.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：随机间隔唤醒小样本：随机等待后播放唤醒词，关注临界超时与状态稳定性。",
+    "原文：串口端口打不开或日志静默：BLOCKED，归因到 logger/端口占用/接线。",
+    "源任务未给出随机间隔范围或轮次阈值，因此不断言数值。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/random_interval_wake.example.json"
+  ]
+}

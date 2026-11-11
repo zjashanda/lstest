@@ -1,0 +1,45 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-wake-latency",
+  "title": "唤醒响应时间",
+  "profile": "cskwb01",
+  "stage": "wake",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "HOST_AUDIO_START",
+        "WAKE"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "wake_latency",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/wake_latency.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "audio_start_before_wake",
+      "kind": "event_order",
+      "before": "HOST_AUDIO_START",
+      "after": "WAKE"
+    },
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：唤醒响应时间小样本：只统计成功唤醒轮次的响应耗时，并输出阈值复核信息。",
+    "原文：播放或声卡不可用：BLOCKED，归因到测试环境/播放链路。",
+    "源任务只说“输出阈值复核信息”，没有给出具体毫秒阈值，因此不填 max_ms，也不伪造 PASS 时延。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/wake_latency.example.json"
+  ]
+}

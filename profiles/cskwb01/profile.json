@@ -1,0 +1,296 @@
+{
+  "schema_version": 2,
+  "profile_id": "cskwb01",
+  "contract_mode": "draft",
+  "ports": [
+    {
+      "role": "ap",
+      "port": "COM14",
+      "baudrate": 115200,
+      "read_only": true,
+      "capabilities": ["serial_log", "wake_marker", "partial_control"]
+    },
+    {
+      "role": "cp",
+      "port": "COM12",
+      "baudrate": 115200,
+      "read_only": true,
+      "capabilities": ["serial_log", "wake_marker", "command_keyword"]
+    },
+    {
+      "role": "asr",
+      "port": "COM13",
+      "baudrate": 115200,
+      "read_only": true,
+      "capabilities": ["serial_log", "asr_marker", "online_wakeup"]
+    },
+    {
+      "role": "control",
+      "port": "COM15",
+      "baudrate": 115200,
+      "read_only": false,
+      "capabilities": ["power_control", "pa_control"]
+    }
+  ],
+  "recovery": {
+    "initialization_timeout_s": 15.0,
+    "restart_poll_interval_s": 0.5,
+    "stable_for_s": 3.0,
+    "stop_on_failure": false
+  },
+  "commands": [],
+  "coverage_policy": {
+    "roles": {
+      "full": ["ap", "cp", "asr"],
+      "minimum": ["ap"]
+    },
+    "missing_non_minimum": "COVERAGE_DEGRADED",
+    "missing_minimum": "BLOCKED"
+  },
+  "event_rules": [
+    {
+      "rule_id": "cskwb01-cp-wake",
+      "event_type": "wake_result",
+      "sources": {"sources": ["cp"]},
+      "regex": "(?P<wake_marker>WAKE\\(1\\))(?!\\d)",
+      "presentation_capture": "wake_marker",
+      "stage": "wake",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": ["wake"],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "WAKE(1)", "source": "cp", "presentation": "WAKE(1)"}
+        ],
+        "negative": [
+          {"text": "WAKE(0): KEY=1(打开空调)", "source": "cp"}
+        ]
+      }
+    },
+    {
+      "rule_id": "cskwb01-ap-wakeup-callback",
+      "event_type": "wake_result",
+      "sources": {"sources": ["ap"]},
+      "regex": "wakeup_callback,\\s*keyword:\\s*(?P<keyword>.+)$",
+      "presentation_capture": "keyword",
+      "stage": "wake",
+      "correlation": {"identity_capture": "keyword"},
+      "mirror_policy": "distinct",
+      "required_for": ["wake"],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "wakeup_callback, keyword: xiao mei xiao mei", "source": "ap", "presentation": "xiao mei xiao mei"}
+        ],
+        "negative": [
+          {"text": "offline_asr_callbak, keyword: 打开空调", "source": "ap"}
+        ]
+      }
+    },
+    {
+      "rule_id": "cskwb01-asr-online-wakeup",
+      "event_type": "wake_result",
+      "sources": {"sources": ["asr"]},
+      "regex": "online_wakeup,\\s*SID:\\s*(?P<sid>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+      "presentation_capture": "sid",
+      "stage": "wake",
+      "correlation": {"identity_capture": "sid"},
+      "mirror_policy": "distinct",
+      "required_for": ["wake"],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "online_wakeup, SID: 3f2b8c1d-4a5e-4b7c-9d10-0a1b2c3d4e5f", "source": "asr", "presentation": "3f2b8c1d-4a5e-4b7c-9d10-0a1b2c3d4e5f"}
+        ],
+        "negative": [
+          {"text": "online_wakeup, SID: n/a", "source": "asr"}
+        ]
+      }
+    },
+    {
+      "rule_id": "cskwb01-cp-command-keyword",
+      "event_type": "command_evidence",
+      "sources": {"sources": ["cp"]},
+      "regex": "WAKE\\(0\\).*?KEY=\\d+\\((?P<keyword>[^)]*)\\)",
+      "presentation_capture": "keyword",
+      "stage": "command",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": [],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "WAKE(0): KEY=1(打开空调)", "source": "cp", "presentation": "打开空调"}
+        ],
+        "negative": [
+          {"text": "WAKE(1)", "source": "cp"}
+        ]
+      }
+    },
+    {
+      "rule_id": "cskwb01-offline-asr",
+      "event_type": "offline_result",
+      "sources": {"sources": ["asr"]},
+      "regex": "offline_asr_callba(?:k|ck),\\s*(?:text|keyword):\\s*(?P<text>.+)$",
+      "presentation_capture": "text",
+      "stage": "command",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": ["command"],
+      "empty_placeholder": "",
+      "notes": "Polaris serial_log_parser.py 的 ASR_CALLBACK_TEXT_RE 要求 marker 后紧跟逗号（offline_asr_callbak, keyword: ...）；project_marker_overlays.json 只列了不含逗号的片段 offline_asr_callbak keyword。此处按解析器形状取材，不改变 marker 语义。",
+      "fixtures": {
+        "positive": [
+          {"text": "offline_asr_callbak, keyword: 打开空调", "source": "asr", "presentation": "打开空调"}
+        ],
+        "negative": [
+          {"text": "online_asr_callbak, text: 打开空调", "source": "asr"}
+        ]
+      }
+    },
+    {
+      "rule_id": "cskwb01-online-asr",
+      "event_type": "online_result",
+      "sources": {"sources": ["asr"]},
+      "regex": "online_asr_callba(?:k|ck),\\s*(?:text|keyword):\\s*(?P<text>.+)$",
+      "presentation_capture": "text",
+      "stage": "command",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": ["command"],
+      "empty_placeholder": "",
+      "notes": "Polaris serial_log_parser.py 的 ASR_CALLBACK_TEXT_RE 要求 marker 后紧跟逗号（online_asr_callbak, text: ...）；project_marker_overlays.json 只列了不含逗号的片段 online_asr_callbak text。此处按解析器形状取材，不改变 marker 语义。",
+      "fixtures": {
+        "positive": [
+          {"text": "online_asr_callbak, text: 打开空调快", "source": "asr", "presentation": "打开空调快"}
+        ],
+        "negative": [
+          {"text": "offline_asr_callbak, keyword: 打开空调", "source": "asr"}
+        ]
+      }
+    },
+    {
+      "rule_id": "cskwb01-weak-actuator-ack",
+      "event_type": "command_evidence",
+      "sources": {"sources": ["ap"]},
+      "regex": "(?P<ack>device ack|control ack)",
+      "presentation_capture": "ack",
+      "stage": "command",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": [],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "device ack", "source": "ap", "presentation": "device ack"}
+        ],
+        "negative": [
+          {"text": "no actuator feedback for 3000ms", "source": "ap"}
+        ]
+      }
+    },
+    {
+      "rule_id": "cskwb01-player-play",
+      "event_type": "player_state",
+      "sources": {"sources": ["ap"]},
+      "regex": "soundplayer status:\\s*(?P<status>2)\\b",
+      "presentation_capture": "status",
+      "stage": "player",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": [],
+      "empty_placeholder": "",
+      "state_class": "active",
+      "render_policy": "all",
+      "fixtures": {
+        "positive": [
+          {"text": "soundplayer status: 2", "source": "ap", "presentation": "2"}
+        ],
+        "negative": [
+          {"text": "soundplayer status: 6", "source": "ap"}
+        ]
+      }
+    },
+    {
+      "rule_id": "cskwb01-player-stop",
+      "event_type": "player_state",
+      "sources": {"sources": ["ap"]},
+      "regex": "soundplayer status:\\s*(?P<status>6)\\b",
+      "presentation_capture": "status",
+      "stage": "player",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": [],
+      "empty_placeholder": "",
+      "state_class": "terminal",
+      "render_policy": "all",
+      "fixtures": {
+        "positive": [
+          {"text": "soundplayer status: 6", "source": "ap", "presentation": "6"}
+        ],
+        "negative": [
+          {"text": "soundplayer status: 2", "source": "ap"}
+        ]
+      }
+    },
+    {
+      "rule_id": "cskwb01-boot-reason",
+      "event_type": "restart",
+      "sources": {"sources": ["ap"]},
+      "regex": "(?P<boot_marker>Boot Reason|VENUSA BOOT)",
+      "presentation_capture": "boot_marker",
+      "stage": "recovery",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": [],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "Boot Reason", "source": "ap", "presentation": "Boot Reason"}
+        ],
+        "negative": [
+          {"text": "Boot loader stage 2", "source": "ap"}
+        ]
+      }
+    }
+  ],
+  "notes": {
+    "topology": "csk_ap_cp_wb01_control",
+    "roles": {
+      "ap": "cskap/AP 日志和部分控制（COM14）",
+      "cp": "cskcp/CP 日志与唤醒、命令关键词证据（COM12）",
+      "asr": "WB01/ASR 日志（COM13）",
+      "control": "上下电与 PA 控制串口（COM15）"
+    },
+    "control_preconditions": ["uut-pa.on", "pa-enable.set 0 17 0 1"],
+    "role_scoping": "每条规则的 sources.sources 只使用 Polaris project_profiles/cskwb01.md 与 env 模板声明的角色名。",
+    "event_mapping": {
+      "wake_result": "CP WAKE(1)、AP wakeup_callback、WB01 online_wakeup",
+      "offline_result": "WB01 offline_asr_callbak",
+      "online_result": "WB01 online_asr_callbak",
+      "command_ack": "本项目无云端 DeviceControl 证据，故不声明",
+      "command_evidence": "CP WAKE(0) KEY=<keyword> 本地识别证据与弱 actuator marker（device ack/control ack）",
+      "player_state": "soundplayer status 2=active / 6=terminal",
+      "restart": "Boot Reason / VENUSA BOOT"
+    },
+    "timeouts_source": "configs/projects/cskwb01.env.example.json 的 timeouts.observe_ms=15000 与 recognition_timeout_s=15",
+    "unverified": "端口、波特率与角色来自 Polaris env 模板；未在 lstest 侧复核真机。"
+  },
+  "provenance": {
+    "source_repo": "zjashanda/Polaris",
+    "source_commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a",
+    "source_paths": [
+      "satellite/cucumber-agent-testing/configs/projects/cskwb01.env.example.json",
+      "satellite/cucumber-agent-testing/references/project_marker_overlays.json",
+      "satellite/cucumber-agent-testing/references/project_profiles.json",
+      "satellite/cucumber-agent-testing/references/project_profiles/cskwb01.md",
+      "satellite/cucumber-agent-testing/runtime/parsers/serial_log_parser.py",
+      "satellite/cucumber-agent-testing/runtime/capabilities.py"
+    ],
+    "evidence_class": "marker-strings-only",
+    "captured_device_logs": false,
+    "verified": false,
+    "note": "所有正则只由 Polaris 文档与解析器中列出的 marker 字符串推导；fixtures 是按这些 marker 合成的字符串，不是采集到的设备日志，也没有逐条真机复核。"
+  }
+}

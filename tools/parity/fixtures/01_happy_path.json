@@ -1,0 +1,130 @@
+{
+  "schema": "lstest.parity_scenario.v1",
+  "name": "happy_path",
+  "description": "完整正向链路：唤醒 -> 离线识别 -> 播放 -> 命令回执 -> 请求/响应 -> 播放结束。11 个合同 kind 全在此场景出现（PASS 侧）。",
+  "facts": [
+    {"event_type": "WAKE", "source": "ap", "role": "ap", "port": "COM14", "sequence": 1, "ts_ms": 0},
+    {"event_type": "OFFLINE_ASR", "source": "ap", "role": "ap", "port": "COM14", "sequence": 2, "ts_ms": 800, "captures": {"text": "打开空调"}},
+    {"event_type": "PLAY_URL", "source": "ap", "role": "ap", "port": "COM14", "sequence": 3, "ts_ms": 1200, "captures": {"url": "https://media.example/a.wav"}},
+    {"event_type": "PLAYER", "polaris_event_type": "MediaStarted", "source": "ap", "role": "ap", "port": "COM14", "sequence": 4, "ts_ms": 1500, "state_class": "active", "captures": {"state": "active"}},
+    {"event_type": "COMMAND_ACK", "source": "ap", "role": "ap", "port": "COM14", "sequence": 5, "ts_ms": 1800, "captures": {"skill": "DeviceControl"}},
+    {"event_type": "REQUEST_ID", "source": "ap", "role": "ap", "port": "COM14", "sequence": 6, "ts_ms": 2400, "captures": {"rid": "abc123"}},
+    {"event_type": "RESPONSE_ID", "source": "ap", "role": "ap", "port": "COM14", "sequence": 7, "ts_ms": 3000, "captures": {"rid": "abc123"}},
+    {"event_type": "PLAYER", "polaris_event_type": "MediaCompleted", "source": "ap", "role": "ap", "port": "COM14", "sequence": 8, "ts_ms": 6000, "state_class": "terminal", "captures": {"state": "terminal"}}
+  ],
+  "checks": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE",
+      "min_count": 1,
+      "polaris": {"primitive": "assert_event_exists", "args": {"event_type": "WakeDetected", "min_count": 1}}
+    },
+    {
+      "name": "wake_present_from_ap",
+      "kind": "event_exists",
+      "event_type": "WAKE",
+      "min_count": 1,
+      "source": "ap",
+      "polaris": {"primitive": "assert_event_exists", "args": {"event_type": "WakeDetected", "min_count": 1, "source": "ap"}}
+    },
+    {
+      "name": "exception_absent",
+      "kind": "event_absent",
+      "event_type": "DEVICE_EXCEPTION",
+      "polaris": {"primitive": "assert_no_event_exists", "args": {"event_type": "DeviceException"}}
+    },
+    {
+      "name": "wake_before_asr",
+      "kind": "event_order",
+      "before": "WAKE",
+      "after": "OFFLINE_ASR",
+      "polaris": {"primitive": "assert_event_order", "args": {"before": "WakeDetected", "after": "ASRDetected"}}
+    },
+    {
+      "name": "asr_within_3s",
+      "kind": "event_within_ms",
+      "from": "WAKE",
+      "to": "OFFLINE_ASR",
+      "max_ms": 3000,
+      "polaris": {"primitive": "assert_event_within_ms", "args": {"event_type": "ASRDetected", "within_ms": 3000, "anchor_event_type": "WakeDetected"}}
+    },
+    {
+      "name": "no_exception_during_wake",
+      "kind": "event_not_during",
+      "event_type": "DEVICE_EXCEPTION",
+      "window_from": "WAKE",
+      "window_to": "PLAYER",
+      "polaris": {"primitive": "assert_no_event_during", "args": {"event_type": "DeviceException", "duration_ms": 1500, "anchor_event_type": "WakeDetected"}}
+    },
+    {
+      "name": "command_chain",
+      "kind": "sequence",
+      "steps": ["WAKE", "OFFLINE_ASR", "COMMAND_ACK"],
+      "polaris": {"primitive": "assert_sequence", "args": {"chain": "WakeDetected->ASRDetected->CommandDetected", "within_ms": 100000}}
+    },
+    {
+      "name": "ack_to_media_completed",
+      "kind": "duration",
+      "start_event": "COMMAND_ACK",
+      "end_event": "PLAYER",
+      "max_ms": 10000,
+      "polaris": {"primitive": "assert_event_within_ms", "args": {"event_type": "MediaCompleted", "within_ms": 10000, "anchor_event_type": "CommandDetected"}}
+    },
+    {
+      "name": "request_response",
+      "kind": "response",
+      "request": "REQUEST_ID",
+      "response": "RESPONSE_ID",
+      "max_ms": 2000,
+      "match_capture": "rid",
+      "polaris": {"primitive": "assert_response", "args": {"response": "ResponseIssued", "anchor": "RequestIssued", "within_ms": 2000}}
+    },
+    {
+      "name": "wake_count",
+      "kind": "count_range",
+      "event_type": "WAKE",
+      "min": 1,
+      "max": 2,
+      "polaris": {"primitive": "assert_count_range", "args": {"event_type": "WakeDetected", "min": 1, "max": 2}}
+    },
+    {
+      "name": "player_active_state",
+      "kind": "state_required",
+      "event_type": "PLAYER",
+      "state_class": "active",
+      "polaris": {"primitive": "state_expected", "args": {"token": "PLAYER_ACTIVE"}}
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot",
+      "polaris": {"primitive": "assert_no_runtime_reboot", "args": {}}
+    },
+    {
+      "name": "attribution_wake_triggers_asr",
+      "kind": "attribution_graph",
+      "rules": [
+        {"from": "WAKE", "to": ["OFFLINE_ASR"], "relation": "trigger", "within_ms": 3000, "require_order": true}
+      ],
+      "polaris": {
+        "primitive": "build_event_graph",
+        "args": {
+          "rules": [
+            {"id": "wake_to_asr", "relation": "trigger", "within_ms": 3000, "src": {"event_types": ["WakeDetected"]}, "dst": {"event_types": ["ASRDetected"]}}
+          ]
+        }
+      }
+    },
+    {
+      "name": "coverage_required_states",
+      "kind": "coverage_states",
+      "required_states": ["preparation", "active", "terminal"],
+      "polaris": {"primitive": "coverage_policy", "args": {"required_states": ["preparation", "active", "terminal"]}}
+    }
+  ],
+  "notes": [
+    "PLAYER 事实用 polaris_event_type 区分 active(MediaStarted) 与 terminal(MediaCompleted)；duration 的 Polaris 期望显式取 MediaCompleted。",
+    "response 的 match_capture 只在关联成立的 PASS 路径上与 Polaris 时间判定一致，关联不符的负例见 parity-report.md 的已知差异。",
+    "coverage_required_states 只比较缺失状态集合（preparation 缺失），不比较 lstest 的 COVERAGE_DEGRADED 与 Polaris 的 WARN 字面值。"
+  ]
+}

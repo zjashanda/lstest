@@ -1,0 +1,27 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-new-feature-template",
+  "title": "新功能接入任务模板",
+  "profile": "cskwb01",
+  "stage": "command",
+  "metadata": {
+    "timeline": {
+      "required_facts": [],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "new-feature-template",
+      "path": "satellite/cucumber-agent-testing/tasks/templates/new_feature.template.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [],
+  "notes": [
+    "原文：新功能第一次接入时使用本模板。先把意图、前置、动作、证据、断言和归因写清楚，再沉淀到 feature/mapping/registry。",
+    "原文：串口上应出现哪些 marker",
+    "原文：是否需要 ASR 文本、TTS 播报、在线状态、云端响应或设备动作证据",
+    "该文件是占位模板（status=needs_sedimentation，task_id=replace_with_feature_name），源中没有可执行的具体期望，因此本用例不生成断言；它是 tasks/ 下第 29 个带 task_id 的 JSON。",
+    "来源：satellite/cucumber-agent-testing/tasks/templates/new_feature.template.json"
+  ]
+}
