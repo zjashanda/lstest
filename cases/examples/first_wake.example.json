@@ -1,0 +1,45 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-first-wake",
+  "title": "首次唤醒",
+  "profile": "cskwb01",
+  "stage": "wake",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "HOST_AUDIO_START"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "first_wake",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/first_wake.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_marker_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "audio_start_before_wake",
+      "kind": "event_order",
+      "before": "HOST_AUDIO_START",
+      "after": "WAKE"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：播放唤醒词后应观察到 CP/AP/ASR 唤醒证据。",
+    "原文：播放成功但无唤醒证据：设备听音链路或固件唤醒问题。",
+    "源任务未给出唤醒时延阈值，只断言播放起点早于 WAKE。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/first_wake.example.json"
+  ]
+}

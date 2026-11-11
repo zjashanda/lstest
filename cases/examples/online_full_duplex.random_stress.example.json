@@ -1,0 +1,45 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-online-full-duplex-random-stress",
+  "title": "在线全双工随机压测（FD-011/FD-012）",
+  "profile": "cskwb01",
+  "stage": "duplex",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "DEVICE_EXCEPTION"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "online_full_duplex.random_stress",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/online_full_duplex.random_stress.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    },
+    {
+      "name": "no_device_exception",
+      "kind": "event_absent",
+      "event_type": "DEVICE_EXCEPTION"
+    }
+  ],
+  "notes": [
+    "原文：全双工随机在线交互中不应出现 reboot/crash/watchdog；媒体响应、额外识别和连续失败需要按类别统计。",
+    "原文：FAIL_REBOOT_OR_CRASH：设备稳定性问题候选。",
+    "原文：WARN_UNEXPECTED_RECOGNITION：误识别、自激或环境噪声候选。",
+    "max_rounds=12 是压测轮次配置，不是结果阈值，因此不写成 count_range 上限。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/online_full_duplex.random_stress.example.json"
+  ]
+}

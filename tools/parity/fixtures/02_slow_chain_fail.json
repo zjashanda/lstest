@@ -1,0 +1,37 @@
+{
+  "schema": "lstest.parity_scenario.v1",
+  "name": "slow_chain_fail",
+  "description": "唤醒后识别超时、命令到播放超时、事件顺序被打破：event_within_ms / duration / sequence 的 FAIL 侧。",
+  "facts": [
+    {"event_type": "WAKE", "source": "ap", "role": "ap", "port": "COM14", "sequence": 1, "ts_ms": 0},
+    {"event_type": "OFFLINE_ASR", "source": "ap", "role": "ap", "port": "COM14", "sequence": 2, "ts_ms": 5200, "captures": {"text": "打开空调"}},
+    {"event_type": "PLAYER", "polaris_event_type": "MediaStarted", "source": "ap", "role": "ap", "port": "COM14", "sequence": 3, "ts_ms": 5400, "state_class": "active", "captures": {"state": "active"}}
+  ],
+  "checks": [
+    {
+      "name": "asr_within_3s",
+      "kind": "event_within_ms",
+      "from": "WAKE",
+      "to": "OFFLINE_ASR",
+      "max_ms": 3000,
+      "polaris": {"primitive": "assert_event_within_ms", "args": {"event_type": "ASRDetected", "within_ms": 3000, "anchor_event_type": "WakeDetected"}}
+    },
+    {
+      "name": "wake_to_player_within_4s",
+      "kind": "duration",
+      "start_event": "WAKE",
+      "end_event": "PLAYER",
+      "max_ms": 4000,
+      "polaris": {"primitive": "assert_event_within_ms", "args": {"event_type": "MediaStarted", "within_ms": 4000, "anchor_event_type": "WakeDetected"}}
+    },
+    {
+      "name": "ordered_chain_broken",
+      "kind": "sequence",
+      "steps": ["WAKE", "PLAYER", "OFFLINE_ASR"],
+      "polaris": {"primitive": "assert_sequence", "args": {"chain": "WakeDetected->MediaStarted->ASRDetected", "within_ms": 100000}}
+    }
+  ],
+  "notes": [
+    "识别比阈值慢 2200ms，两侧都应判 FAIL；sequence 的第三个 step 在时间上已经过去，因此必然断链。"
+  ]
+}

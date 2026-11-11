@@ -1,0 +1,30 @@
+{
+  "schema": "lstest.parity_scenario.v1",
+  "name": "count_range_exceeded_fail",
+  "description": "同一唤醒事实出现 3 次，超出 1..2 上限：count_range 与 event_exists(min_count) 的 FAIL 侧。",
+  "facts": [
+    {"event_type": "WAKE", "source": "ap", "role": "ap", "port": "COM14", "sequence": 1, "ts_ms": 0},
+    {"event_type": "WAKE", "source": "ap", "role": "ap", "port": "COM14", "sequence": 2, "ts_ms": 100},
+    {"event_type": "WAKE", "source": "ap", "role": "ap", "port": "COM14", "sequence": 3, "ts_ms": 200}
+  ],
+  "checks": [
+    {
+      "name": "wake_count",
+      "kind": "count_range",
+      "event_type": "WAKE",
+      "min": 1,
+      "max": 2,
+      "polaris": {"primitive": "assert_count_range", "args": {"event_type": "WakeDetected", "min": 1, "max": 2}}
+    },
+    {
+      "name": "wake_present_min_4",
+      "kind": "event_exists",
+      "event_type": "WAKE",
+      "min_count": 4,
+      "polaris": {"primitive": "assert_event_exists", "args": {"event_type": "WakeDetected", "min_count": 4}}
+    }
+  ],
+  "notes": [
+    "Polaris 的 count_range 期望由 assert_event_exists(min_count=1)=PASS 与 assert_no_event_exists(第 3 个之后的唤醒)=FAIL 组合，聚合结论为 FAIL。"
+  ]
+}

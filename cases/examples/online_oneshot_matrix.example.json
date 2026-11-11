@@ -1,0 +1,56 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-online-oneshot-matrix",
+  "title": "在线 one-shot 间隔矩阵",
+  "profile": "cskwb01",
+  "stage": "network",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "ONLINE_ASR",
+        "RESPONSE_ID"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "online_oneshot_matrix",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/online_oneshot_matrix.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "wake_before_online_asr",
+      "kind": "event_order",
+      "before": "WAKE",
+      "after": "ONLINE_ASR"
+    },
+    {
+      "name": "online_asr_present",
+      "kind": "event_exists",
+      "event_type": "ONLINE_ASR"
+    },
+    {
+      "name": "online_response_present",
+      "kind": "event_exists",
+      "event_type": "RESPONSE_ID"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：在线 one-shot 间隔矩阵 smoke：不同唤醒后间隔播放在线问答并观察 ASR/TTS。",
+    "原文：前置在线、模式切换或云控失败：BLOCKED 或云控前置问题，不直接判固件 FAIL。",
+    "源任务未给出间隔毫秒阈值，因此不断言间隔数值。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/online_oneshot_matrix.example.json"
+  ]
+}

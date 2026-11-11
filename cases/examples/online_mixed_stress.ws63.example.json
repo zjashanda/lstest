@@ -1,0 +1,58 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-online-mixed-stress-ws63",
+  "title": "在线混合交互压测（WS63）",
+  "profile": "venusws63",
+  "stage": "network",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "ONLINE_ASR",
+        "RESPONSE_ID",
+        "DEVICE_EXCEPTION"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "online_mixed_stress.ws63",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/online_mixed_stress.ws63.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "online_asr_present",
+      "kind": "event_exists",
+      "event_type": "ONLINE_ASR"
+    },
+    {
+      "name": "online_response_count",
+      "kind": "count_range",
+      "event_type": "RESPONSE_ID",
+      "min": 1
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    },
+    {
+      "name": "no_device_exception",
+      "kind": "event_absent",
+      "event_type": "DEVICE_EXCEPTION"
+    }
+  ],
+  "notes": [
+    "原文：WS63 无 CP 串口，runner 会跳过 CP reader；断言以 AP + upper/WS63 日志、在线 ASR/TTS/media、reboot/crash marker 为准。",
+    "原文：FAIL_NO_WAKE：播放成功但 AP/upper 都无 wake marker，先排查声卡、PA 前置、麦克风/听音链路。",
+    "原文：Do not treat AP-only evidence as full AP+upper coverage.",
+    "源任务 environment.project 为 venusws63，故归到 venusws63 profile。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/online_mixed_stress.ws63.example.json"
+  ]
+}

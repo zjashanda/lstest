@@ -1,0 +1,37 @@
+{
+  "schema": "lstest.parity_scenario.v1",
+  "name": "forbidden_event_fail",
+  "description": "唤醒窗口内出现设备异常：event_not_during / event_absent 的 FAIL 侧，以及一条 event_order 的 PASS 侧。",
+  "facts": [
+    {"event_type": "WAKE", "source": "ap", "role": "ap", "port": "COM14", "sequence": 1, "ts_ms": 0},
+    {"event_type": "DEVICE_EXCEPTION", "polaris_event_type": "DeviceException", "source": "ap", "role": "ap", "port": "COM14", "sequence": 2, "ts_ms": 500, "captures": {"text": "TTS url is null"}},
+    {"event_type": "PLAYER", "polaris_event_type": "MediaStarted", "source": "ap", "role": "ap", "port": "COM14", "sequence": 3, "ts_ms": 1000, "state_class": "active", "captures": {"state": "active"}},
+    {"event_type": "PLAYER", "polaris_event_type": "MediaCompleted", "source": "ap", "role": "ap", "port": "COM14", "sequence": 4, "ts_ms": 3000, "state_class": "terminal", "captures": {"state": "terminal"}}
+  ],
+  "checks": [
+    {
+      "name": "no_exception_during_wake",
+      "kind": "event_not_during",
+      "event_type": "DEVICE_EXCEPTION",
+      "window_from": "WAKE",
+      "window_to": "PLAYER",
+      "polaris": {"primitive": "assert_no_event_during", "args": {"event_type": "DeviceException", "duration_ms": 1000, "anchor_event_type": "WakeDetected"}}
+    },
+    {
+      "name": "exception_absent",
+      "kind": "event_absent",
+      "event_type": "DEVICE_EXCEPTION",
+      "polaris": {"primitive": "assert_no_event_exists", "args": {"event_type": "DeviceException"}}
+    },
+    {
+      "name": "wake_before_player",
+      "kind": "event_order",
+      "before": "WAKE",
+      "after": "PLAYER",
+      "polaris": {"primitive": "assert_event_order", "args": {"before": "WakeDetected", "after": "MediaStarted"}}
+    }
+  ],
+  "notes": [
+    "窗口取 WAKE 到第一个 PLAYER（0..1000ms），异常落在窗口内，两侧都判 FAIL。"
+  ]
+}

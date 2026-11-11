@@ -1,0 +1,50 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-offline-oneshot-matrix",
+  "title": "离线 one-shot 间隔矩阵",
+  "profile": "cskwb01",
+  "stage": "command",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "OFFLINE_ASR"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "offline_oneshot_matrix",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/offline_oneshot_matrix.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "wake_before_offline_asr",
+      "kind": "event_order",
+      "before": "WAKE",
+      "after": "OFFLINE_ASR"
+    },
+    {
+      "name": "offline_asr_present",
+      "kind": "event_exists",
+      "event_type": "OFFLINE_ASR"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：离线 one-shot 间隔矩阵 smoke：不同唤醒后间隔播放命令词并输出矩阵结果。",
+    "原文：未唤醒：唤醒链路问题，不能直接判命令词失败。",
+    "源任务未给出间隔毫秒阈值，因此不断言间隔数值。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/offline_oneshot_matrix.example.json"
+  ]
+}

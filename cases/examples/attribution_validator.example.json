@@ -1,0 +1,25 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-attribution-validator",
+  "title": "归因一致性复核",
+  "profile": "cskwb01",
+  "stage": "attribution",
+  "metadata": {
+    "timeline": {
+      "required_facts": [],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "attribution_validator",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/attribution_validator.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [],
+  "notes": [
+    "原文：归因一致性复核：扫描已有 run，检查 BDD 结论、模块 summary 和原始证据是否一致。",
+    "源任务没有声明设备事件期望；它复核既有 run 的结论、summary 与原始证据是否一致，因此本用例不生成事件断言，也不伪造 PASS 判据。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/attribution_validator.example.json"
+  ]
+}

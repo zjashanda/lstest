@@ -1,0 +1,48 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-recognition-mode-wake",
+  "title": "识别模式唤醒",
+  "profile": "cskwb01",
+  "stage": "recognition",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "recognition_mode_wake",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/recognition_mode_wake.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "second_wake_within_window",
+      "kind": "sequence",
+      "steps": [
+        "WAKE",
+        "WAKE"
+      ],
+      "allow_gaps": true,
+      "max_span_ms": 15000
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：第一次唤醒成功后，识别窗口内二次唤醒应有 wake/ASR 证据，若已超时需标记时序风险。",
+    "原文：第二次唤醒必须落在识别超时窗口内，并避开唤醒提示音/TTS 播放的临界区。",
+    "max_span_ms=15000 来自源任务 execution.recognition_timeout_s=15，即两次唤醒都必须在识别超时窗口内。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/recognition_mode_wake.example.json"
+  ]
+}

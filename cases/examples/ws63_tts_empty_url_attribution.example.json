@@ -1,0 +1,48 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-ws63-tts-empty-url-attribution",
+  "title": "WS63 DeviceControl 空 TTS URL 归因回归",
+  "profile": "venusws63",
+  "stage": "attribution",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "COMMAND_ACK"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "ws63_tts_empty_url_attribution",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/ws63_tts_empty_url_attribution.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "command_ack_present",
+      "kind": "event_exists",
+      "event_type": "COMMAND_ACK"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：回归 WS63 DeviceControl 有回复但 TTS URL 为空的归因，确保不会误判成识别或控制失败。",
+    "原文：control_reply: PASS when DeviceControl/audioBroadcast/cloud.speech.reply exists。",
+    "原文：tts_response: FAIL/WARN when TTS url is null or no valid tts url。",
+    "原文：Do not classify DeviceControl + empty TTS URL as ASR failure by default.",
+    "原文：Do not claim physical beep without explicit beep/buzzer/manual/acoustic evidence.",
+    "原文：Do not treat AP-only evidence as full AP+upper coverage.",
+    "空 TTS URL 属于负向归因口径，不能写成“应当缺失响应”的正向事件断言；这里只确认控制链路与唤醒证据存在。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/ws63_tts_empty_url_attribution.example.json"
+  ]
+}

@@ -8,6 +8,14 @@
 - `agents/openai.yaml`
 - `config/profile.example.json`
 - `config/requirements.txt`
+- `profiles/README.md`（新 canonical 项目差异层）
+- `profiles/<project>/profile.json`
+- `cases/README.md`（声明式用例合同）
+- `cases/packs/`、`cases/examples/`、`cases/fa2/`
+- `adapters/`（薄原始记录适配）
+- `docs/voice-validation/`（测试方法与项目知识）
+- `docs/migration/polaris-capability-mapping.md`（Polaris 吸收映射）
+- `tools/parity/`（与 Polaris 的 dry-run 对照）
 - `references/acceptance.md`
 - `references/profile-driven-log-discovery.md`
 - `references/profile-driven-migration.md`
@@ -19,8 +27,11 @@
 - `requirements.txt`
 - `scripts/__init__.py`
 - `scripts/adapter_guard.py`
+- `scripts/assertions.py`
+- `scripts/attribution.py`
 - `scripts/audio_synthesis.py`
 - `scripts/core.py`
+- `scripts/coverage.py`
 - `scripts/environment_cleanup.py`
 - `scripts/install_laid_linux.sh`
 - `scripts/install_laid_windows.ps1`
@@ -39,10 +50,17 @@
 - `scripts/timeline.py`
 - `scripts/timing.py`
 - `tests/__init__.py`
+- `tests/test_adapters.py`
+- `tests/test_assertions.py`
+- `tests/test_attribution.py`
+- `tests/test_coverage.py`
 - `tests/test_environment_cleanup.py`
 - `tests/test_foundation.py`
 - `tests/test_long_run_cleanup.py`
+- `tests/test_migrated_cases.py`
+- `tests/test_parity_polaris.py`
 - `tests/test_profile_driven.py`
+- `tests/test_profiles_migrated.py`
 - `tests/test_result_stats.py`
 
 ## Install the skill

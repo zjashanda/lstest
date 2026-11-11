@@ -1,0 +1,63 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-pack-online-full-duplex",
+  "title": "在线全双工验证包",
+  "profile": "cskwb01",
+  "stage": "duplex",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "ONLINE_ASR",
+        "RESPONSE_ID",
+        "DEVICE_EXCEPTION"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "online-full-duplex",
+      "path": "docs/wiki/voice-validation/packs/online-full-duplex.md",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "wake_before_online_asr",
+      "kind": "event_order",
+      "before": "WAKE",
+      "after": "ONLINE_ASR"
+    },
+    {
+      "name": "online_asr_present",
+      "kind": "event_exists",
+      "event_type": "ONLINE_ASR"
+    },
+    {
+      "name": "online_response_present",
+      "kind": "event_exists",
+      "event_type": "RESPONSE_ID"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    },
+    {
+      "name": "no_device_exception",
+      "kind": "event_absent",
+      "event_type": "DEVICE_EXCEPTION"
+    }
+  ],
+  "notes": [
+    "原文：wake、online ASR、TTS/media 响应。",
+    "原文：必须分清“全双工配置是否生效”和“全双工识别是否成功”。",
+    "原文：超时边界必须设置 guard，guard 内不用于强判固件问题。",
+    "原文：任何离线、API 环境不一致、声卡/PA 不可用、串口日志缺失，都先 BLOCKED。",
+    "来源：docs/wiki/voice-validation/packs/online-full-duplex.md"
+  ]
+}

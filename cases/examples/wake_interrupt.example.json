@@ -1,0 +1,50 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-wake-interrupt",
+  "title": "自播中唤醒打断",
+  "profile": "cskwb01",
+  "stage": "wake",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "PLAYER",
+        "WAKE"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "wake_interrupt",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/wake_interrupt.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "media_window_present",
+      "kind": "event_exists",
+      "event_type": "PLAYER"
+    },
+    {
+      "name": "media_before_wake",
+      "kind": "event_order",
+      "before": "PLAYER",
+      "after": "WAKE"
+    },
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：自播中唤醒打断 smoke：使用已测得自播窗口，在窗口内注入唤醒词。",
+    "原文：需求口径不明确或注入落在临界时序：TIMING_AMBIGUOUS/REQUIREMENT_REVIEW。",
+    "源任务未给出自播窗口毫秒边界，因此只断言 PLAYER 先于 WAKE。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/wake_interrupt.example.json"
+  ]
+}

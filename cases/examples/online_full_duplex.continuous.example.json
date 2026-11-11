@@ -1,0 +1,65 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-online-full-duplex-continuous",
+  "title": "在线全双工连续识别（FD-002/FD-003）",
+  "profile": "cskwb01",
+  "stage": "duplex",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "ONLINE_ASR",
+        "RESPONSE_ID",
+        "DEVICE_EXCEPTION"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "online_full_duplex.continuous",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/online_full_duplex.continuous.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "wake_before_online_asr",
+      "kind": "event_order",
+      "before": "WAKE",
+      "after": "ONLINE_ASR"
+    },
+    {
+      "name": "continuous_online_asr",
+      "kind": "count_range",
+      "event_type": "ONLINE_ASR",
+      "min": 2
+    },
+    {
+      "name": "online_response_count",
+      "kind": "count_range",
+      "event_type": "RESPONSE_ID",
+      "min": 1
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    },
+    {
+      "name": "no_device_exception",
+      "kind": "event_absent",
+      "event_type": "DEVICE_EXCEPTION"
+    }
+  ],
+  "notes": [
+    "原文：首次唤醒后连续在线语句，验证会话保持、连续 ASR 和连续响应。",
+    "原文：wake_before_command observed。",
+    "原文：successful_response_count >= 1。",
+    "“连续”按至少 2 次 ONLINE_ASR 断言；源任务未声明允许的最大间隔，因此不填 max_span_ms。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/online_full_duplex.continuous.example.json"
+  ]
+}

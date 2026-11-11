@@ -1,0 +1,50 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-command-interrupt",
+  "title": "自播中识别打断",
+  "profile": "cskwb01",
+  "stage": "command",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "PLAYER",
+        "COMMAND_ACK"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "command_interrupt",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/command_interrupt.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "media_window_present",
+      "kind": "event_exists",
+      "event_type": "PLAYER"
+    },
+    {
+      "name": "media_before_command",
+      "kind": "event_order",
+      "before": "PLAYER",
+      "after": "COMMAND_ACK"
+    },
+    {
+      "name": "command_ack_present",
+      "kind": "event_exists",
+      "event_type": "COMMAND_ACK"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：自播中识别打断 smoke：使用已测得自播窗口，在窗口内注入命令词。",
+    "原文：需求口径不明确或注入落在临界时序：TIMING_AMBIGUOUS/REQUIREMENT_REVIEW。",
+    "源任务只说“已测得自播窗口”，没有给出窗口毫秒阈值，因此不断言注入时刻的数值边界。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/command_interrupt.example.json"
+  ]
+}

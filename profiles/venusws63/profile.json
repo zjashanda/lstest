@@ -1,0 +1,381 @@
+{
+  "schema_version": 2,
+  "profile_id": "venusws63",
+  "contract_mode": "draft",
+  "ports": [
+    {
+      "role": "ap",
+      "port": "COM14",
+      "baudrate": 921600,
+      "read_only": true,
+      "capabilities": ["serial_log", "wake_marker", "asr_marker", "tts_marker"]
+    },
+    {
+      "role": "upper",
+      "port": "COM13",
+      "baudrate": 921600,
+      "read_only": true,
+      "capabilities": ["serial_log", "online_wakeup", "cloud_reply"]
+    },
+    {
+      "role": "asr",
+      "port": "COM13",
+      "baudrate": 921600,
+      "read_only": true,
+      "alias_of": "upper",
+      "capabilities": ["serial_log", "asr_marker", "online_wakeup"]
+    },
+    {
+      "role": "control",
+      "port": "COM15",
+      "baudrate": 115200,
+      "read_only": false,
+      "capabilities": ["power_control", "pa_control"]
+    }
+  ],
+  "recovery": {
+    "initialization_timeout_s": 15.0,
+    "restart_poll_interval_s": 0.5,
+    "stable_for_s": 3.0,
+    "stop_on_failure": false
+  },
+  "commands": [],
+  "coverage_policy": {
+    "roles": {
+      "full": ["ap", "upper"],
+      "minimum": ["ap"]
+    },
+    "missing_non_minimum": "COVERAGE_DEGRADED",
+    "missing_minimum": "BLOCKED"
+  },
+  "event_rules": [
+    {
+      "rule_id": "venusws63-ap-wakeup-callback",
+      "event_type": "wake_result",
+      "sources": {"sources": ["ap"]},
+      "regex": "wakeup_callback,\\s*keyword:\\s*(?P<keyword>.+)$",
+      "presentation_capture": "keyword",
+      "stage": "wake",
+      "correlation": {"identity_capture": "keyword"},
+      "mirror_policy": "distinct",
+      "required_for": ["wake"],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "wakeup_callback, keyword: xiao mei xiao mei", "source": "ap", "presentation": "xiao mei xiao mei"}
+        ],
+        "negative": [
+          {"text": "Pre Wakeup: xiao mei xiao mei", "source": "ap"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-ap-pre-wakeup",
+      "event_type": "wake_result",
+      "sources": {"sources": ["ap"]},
+      "regex": "Pre Wakeup:\\s*(?P<keyword>\\S.*)$",
+      "presentation_capture": "keyword",
+      "stage": "wake",
+      "correlation": {"identity_capture": "keyword"},
+      "mirror_policy": "distinct",
+      "required_for": ["wake"],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "Pre Wakeup: xiao mei xiao mei", "source": "ap", "presentation": "xiao mei xiao mei"}
+        ],
+        "negative": [
+          {"text": "wakeup_callback, keyword: xiao mei xiao mei", "source": "ap"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-ap-mark-has-wakeup",
+      "event_type": "wake_result",
+      "sources": {"sources": ["ap"]},
+      "regex": "(?P<mark>mark has wakeup)",
+      "presentation_capture": "mark",
+      "stage": "wake",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": ["wake"],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "algo info mark has wakeup", "source": "ap", "presentation": "mark has wakeup"}
+        ],
+        "negative": [
+          {"text": "wakeup mark cleared", "source": "ap"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-upper-online-wakeup",
+      "event_type": "wake_result",
+      "sources": {"sources": ["upper"]},
+      "regex": "online_wakeup,\\s*SID:\\s*(?P<sid>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+      "presentation_capture": "sid",
+      "stage": "wake",
+      "correlation": {"identity_capture": "sid"},
+      "mirror_policy": "distinct",
+      "required_for": ["wake"],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "online_wakeup, SID: 9c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f", "source": "upper", "presentation": "9c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f"}
+        ],
+        "negative": [
+          {"text": "online_wakeup, SID: n/a", "source": "upper"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-upper-mspeech-cloud-3",
+      "event_type": "online_result",
+      "sources": {"sources": ["upper"]},
+      "regex": "MSpeech Cloud\\s+(?P<evt>3)\\s+evt",
+      "presentation_capture": "evt",
+      "stage": "command",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": ["command"],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "MSpeech Cloud 3 evt", "source": "upper", "presentation": "3"}
+        ],
+        "negative": [
+          {"text": "MSpeech Cloud 4 evt", "source": "upper"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-ap-online-asr-callback",
+      "event_type": "online_result",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "online_asr_callba(?:k|ck),\\s*(?:text|keyword):\\s*(?P<text>.+)$",
+      "presentation_capture": "text",
+      "stage": "command",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": ["command"],
+      "empty_placeholder": "",
+      "notes": "Polaris serial_log_parser.py 的 ASR_CALLBACK_TEXT_RE 要求 marker 后紧跟逗号（online_asr_callbak, text: ...）；project_marker_overlays.json 只列了不含逗号的片段 online_asr_callbak。此处按解析器形状取材，不改变 marker 语义。",
+      "fixtures": {
+        "positive": [
+          {"text": "online_asr_callbak, text: 打开空调快", "source": "ap", "presentation": "打开空调快"}
+        ],
+        "negative": [
+          {"text": "offline_asr_callbak, keyword: 打开空调", "source": "ap"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-midea-device-control",
+      "event_type": "command_ack",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "mideaSkillId\"?\\s*:\\s*\"?(?P<skill>DeviceControl)",
+      "presentation_capture": "skill",
+      "stage": "command",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": ["command"],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "\"mideaSkillId\":\"DeviceControl\"", "source": "upper", "presentation": "DeviceControl"},
+          {"text": "mideaSkillId: DeviceControl", "source": "ap", "presentation": "DeviceControl"}
+        ],
+        "negative": [
+          {"text": "\"mideaSkillId\":\"OtherSkill\"", "source": "upper"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-audio-broadcast",
+      "event_type": "command_ack",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "(?P<marker>cloud\\.instructions\\.audioBroadcast)",
+      "presentation_capture": "marker",
+      "stage": "command",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": ["command"],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "cloud.instructions.audioBroadcast", "source": "upper", "presentation": "cloud.instructions.audioBroadcast"}
+        ],
+        "negative": [
+          {"text": "cloud.speech.trans.ack", "source": "upper"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-cloud-speech-reply",
+      "event_type": "command_ack",
+      "sources": {"sources": ["upper"]},
+      "regex": "(?P<marker>cloud\\.speech\\.reply)",
+      "presentation_capture": "marker",
+      "stage": "command",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": ["command"],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "cloud.speech.reply", "source": "upper", "presentation": "cloud.speech.reply"}
+        ],
+        "negative": [
+          {"text": "cloud.speech.trans.ack", "source": "upper"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-weak-actuator-ack",
+      "event_type": "command_evidence",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "(?P<ack>device ack|control ack)",
+      "presentation_capture": "ack",
+      "stage": "command",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": [],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "control ack", "source": "upper", "presentation": "control ack"}
+        ],
+        "negative": [
+          {"text": "no actuator feedback for 3000ms", "source": "upper"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-tts-url-null",
+      "event_type": "device_exception",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "(?P<marker>TTS url is null|no valid tts url)",
+      "presentation_capture": "marker",
+      "stage": "player",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": [],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "TTS url is null", "source": "ap", "presentation": "TTS url is null"},
+          {"text": "no valid tts url", "source": "upper", "presentation": "no valid tts url"}
+        ],
+        "negative": [
+          {"text": "TTS url is valid", "source": "ap"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-player-play",
+      "event_type": "player_state",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "ttsplayer report state:\\s*(?P<state>play)\\b",
+      "presentation_capture": "state",
+      "stage": "player",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": [],
+      "empty_placeholder": "",
+      "state_class": "active",
+      "render_policy": "all",
+      "fixtures": {
+        "positive": [
+          {"text": "ttsplayer report state: play", "source": "ap", "presentation": "play"}
+        ],
+        "negative": [
+          {"text": "ttsplayer report state: stop", "source": "ap"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-player-stop",
+      "event_type": "player_state",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "ttsplayer report state:\\s*(?P<state>stop)\\b",
+      "presentation_capture": "state",
+      "stage": "player",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": [],
+      "empty_placeholder": "",
+      "state_class": "terminal",
+      "render_policy": "all",
+      "fixtures": {
+        "positive": [
+          {"text": "ttsplayer report state: stop", "source": "ap", "presentation": "stop"}
+        ],
+        "negative": [
+          {"text": "ttsplayer report state: play", "source": "ap"}
+        ]
+      }
+    },
+    {
+      "rule_id": "venusws63-boot-reason",
+      "event_type": "restart",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "(?P<boot_marker>Boot Reason|VENUSA BOOT)",
+      "presentation_capture": "boot_marker",
+      "stage": "recovery",
+      "correlation": {},
+      "mirror_policy": "distinct",
+      "required_for": [],
+      "empty_placeholder": "",
+      "fixtures": {
+        "positive": [
+          {"text": "Boot Reason", "source": "ap", "presentation": "Boot Reason"}
+        ],
+        "negative": [
+          {"text": "Boot loader stage 2", "source": "ap"}
+        ]
+      }
+    }
+  ],
+  "notes": {
+    "topology": "ap_wifi_control_no_cp",
+    "roles": {
+      "ap": "AP 日志观察口（COM14@921600，只读）",
+      "upper": "上位/WiFi 日志观察口（COM13@921600，只读）",
+      "asr": "兼容旧字段，与 upper 指向同一物理口 COM13",
+      "control": "上下电与 PA 控制口（COM15@115200，可写）"
+    },
+    "control_preconditions": ["uut-pa.on", "pa-enable.set 0 17 0 1"],
+    "coverage_note": "无独立 CP 串口；coverage_policy.roles.full=[\"ap\",\"upper\"]，minimum=[\"ap\"]，与 Polaris project_marker_overlays.json 的 coverage_policy 一致。",
+    "role_scoping": "文档未逐条指定端口的通用 marker（cloud reply、TTS、player、boot）在 sources.sources 里同时接受 ap 与 upper，避免在无采集日志时臆断单一端口；待真机日志确认后再收窄。",
+    "event_mapping": {
+      "wake_result": "AP wakeup_callback / Pre Wakeup / mark has wakeup，上位 online_wakeup",
+      "online_result": "上位 MSpeech Cloud 3 evt 与 online_asr_callbak 文本",
+      "command_ack": "mideaSkillId=DeviceControl、cloud.instructions.audioBroadcast、cloud.speech.reply（强云端回复证据）",
+      "command_evidence": "弱 actuator marker（device ack/control ack）只作旁证，不能证明执行机构动作",
+      "device_exception": "TTS url is null / no valid tts url（播报链路异常，不归因为识别失败）",
+      "player_state": "ttsplayer report state play=active / stop=terminal",
+      "restart": "Boot Reason / VENUSA BOOT"
+    },
+    "timeouts_source": "configs/projects/venusws63.env.example.json 的 timeouts.observe_ms=15000 与 recognition_timeout_s=15",
+    "unverified": "端口、波特率与角色来自 Polaris env 模板；未在 lstest 侧复核真机。"
+  },
+  "provenance": {
+    "source_repo": "zjashanda/Polaris",
+    "source_commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a",
+    "source_paths": [
+      "satellite/cucumber-agent-testing/configs/projects/venusws63.env.example.json",
+      "satellite/cucumber-agent-testing/references/project_marker_overlays.json",
+      "satellite/cucumber-agent-testing/references/project_profiles.json",
+      "satellite/cucumber-agent-testing/references/project_profiles/venusws63.md",
+      "satellite/cucumber-agent-testing/references/project_profiles/venusws63_latest_validation.md",
+      "satellite/cucumber-agent-testing/references/project_profiles/venusws63_api_support_matrix.md",
+      "satellite/cucumber-agent-testing/runtime/parsers/serial_log_parser.py",
+      "satellite/cucumber-agent-testing/runtime/capabilities.py"
+    ],
+    "evidence_class": "marker-strings-only",
+    "captured_device_logs": false,
+    "verified": false,
+    "note": "所有正则只由 Polaris 文档、marker overlay 与解析器中列出的 marker 字符串推导；fixtures 是按这些 marker 合成的字符串，不是采集到的设备日志，也没有逐条真机复核。"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-false-wake-human-speech",
+  "title": "合成人声干扰误唤醒",
+  "profile": "cskwb01",
+  "stage": "false_wake",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "false_wake_human_speech",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/false_wake_human_speech.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "no_wake_marker",
+      "kind": "event_absent",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：合成人声干扰误唤醒小样本：播放不含唤醒词的人声干扰，不应出现 wake marker。",
+    "原文：不应出现 wake；出现则记录样本。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/false_wake_human_speech.example.json"
+  ]
+}

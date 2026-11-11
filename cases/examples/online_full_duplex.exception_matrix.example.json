@@ -1,0 +1,45 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-task-online-full-duplex-exception-matrix",
+  "title": "在线全双工异常矩阵（FD-007..FD-010）",
+  "profile": "cskwb01",
+  "stage": "duplex",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "ONLINE_ASR",
+        "COMMAND_ACK"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "online_full_duplex.exception_matrix",
+      "path": "satellite/cucumber-agent-testing/tasks/examples/online_full_duplex.exception_matrix.example.json",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "no_unexpected_online_asr",
+      "kind": "event_absent",
+      "event_type": "ONLINE_ASR"
+    },
+    {
+      "name": "no_unexpected_command",
+      "kind": "event_absent",
+      "event_type": "COMMAND_ACK"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：异常矩阵不以功能 FAIL 为默认目标，而是确认环境/配置/声卡问题会被正确 BLOCKED，静默窗口不会产生额外 ASR/command。",
+    "原文：offline_or_env_mismatch is BLOCKED not firmware FAIL。",
+    "原文：静默或反集窗口出现 ASR/command：误识别/自激候选。",
+    "BLOCKED 归因来自环境前置，不是设备事件，因此不写成事件断言。",
+    "来源：satellite/cucumber-agent-testing/tasks/examples/online_full_duplex.exception_matrix.example.json"
+  ]
+}

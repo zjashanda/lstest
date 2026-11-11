@@ -1,0 +1,50 @@
+{
+  "schema": "lstest.case.v1",
+  "case_id": "polaris-pack-half-duplex",
+  "title": "半双工识别验证包",
+  "profile": "cskwb01",
+  "stage": "duplex",
+  "metadata": {
+    "timeline": {
+      "required_facts": [
+        "WAKE",
+        "COMMAND_ACK"
+      ],
+      "mirror": "distinct",
+      "duplicate": "reject"
+    },
+    "polaris_source": {
+      "task": "half-duplex",
+      "path": "docs/wiki/voice-validation/packs/half-duplex.md",
+      "commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    }
+  },
+  "assertions": [
+    {
+      "name": "wake_present",
+      "kind": "event_exists",
+      "event_type": "WAKE"
+    },
+    {
+      "name": "wake_before_command",
+      "kind": "event_order",
+      "before": "WAKE",
+      "after": "COMMAND_ACK"
+    },
+    {
+      "name": "command_ack_present",
+      "kind": "event_exists",
+      "event_type": "COMMAND_ACK"
+    },
+    {
+      "name": "no_runtime_reboot",
+      "kind": "no_reboot"
+    }
+  ],
+  "notes": [
+    "原文：半双工配置成功和半双工识别成功分开判断。",
+    "原文：未唤醒导致无 ASR，不进入命令识别分母。",
+    "原文：播报中识别策略不明确时输出 REQUIREMENT_REVIEW。",
+    "来源：docs/wiki/voice-validation/packs/half-duplex.md"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "schema": "lstest.parity_scenario.v1",
+  "name": "response_timeout_fail",
+  "description": "请求到响应 5000ms，超过 2000ms 阈值：response 的 FAIL 侧（关联值一致，因此只考察时间分量）。",
+  "facts": [
+    {"event_type": "REQUEST_ID", "source": "ap", "role": "ap", "port": "COM14", "sequence": 1, "ts_ms": 0, "captures": {"rid": "abc123"}},
+    {"event_type": "RESPONSE_ID", "source": "ap", "role": "ap", "port": "COM14", "sequence": 2, "ts_ms": 5000, "captures": {"rid": "abc123"}}
+  ],
+  "checks": [
+    {
+      "name": "request_response",
+      "kind": "response",
+      "request": "REQUEST_ID",
+      "response": "RESPONSE_ID",
+      "max_ms": 2000,
+      "polaris": {"primitive": "assert_response", "args": {"response": "ResponseIssued", "anchor": "RequestIssued", "within_ms": 2000}}
+    }
+  ],
+  "notes": [
+    "两侧都只看时间分量：Polaris 没有 capture 关联原语，lstest 的 match_capture 在这里也成立，不引入额外差异。"
+  ]
+}
