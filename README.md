@@ -168,6 +168,13 @@ python -c "import lstts_core; print(lstts_core.__version__)"
 - 未指定声卡时使用系统默认 Render；指定稳定设备 key 时严格使用该设备，失败不回退。
 - FFmpeg 只用于音频归一化，Windows 实际播放使用 `pygame`/DirectSound，Linux 使用 `aplay`。
 
+## TTS 音频库（先查库、miss 才合成）
+
+- lstest 只做**轻量消费适配器**：`python -u lstest/scripts/tts_library_cli.py spec|lookup|fetch ...`
+- 顺序：生成完整 `ark.tts-spec.v1` → `asset-tools tts-library lookup` → 命中 `fetch` 到 `<task>/assets/tts/original`；未命中交给 `tts-runtime` 合成。
+- 边界：lstest 不写 1006、不建本地缓存、不存共享凭据；**库不可达 ≠ 资产不存在**。
+- 既有 `tts` / `tts-manifest` 行为不变，迁移建议见 [`docs/tts-library.md`](docs/tts-library.md)。
+
 ## 常用命令
 
 ```powershell
