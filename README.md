@@ -24,6 +24,7 @@
 - `references/project-adapter-template.md`
 - `references/result-log-standard.md`
 - `references/scenario-api.md`
+- `references/structured-event-log-v2.md`
 - `requirements.txt`
 - `scripts/__init__.py`
 - `scripts/adapter_guard.py`
@@ -33,6 +34,7 @@
 - `scripts/core.py`
 - `scripts/coverage.py`
 - `scripts/device_snapshot.py`
+- `scripts/eventlog.py`
 - `scripts/environment_cleanup.py`
 - `scripts/install_laid_linux.sh`
 - `scripts/install_laid_windows.ps1`
@@ -58,6 +60,11 @@
 - `tests/test_device_snapshot.py`
 - `tests/test_environment_cleanup.py`
 - `tests/test_foundation.py`
+- `tests/test_eventlog.py`
+- `tests/fixtures/legacy_flat_v1_smoke10.txt`
+- `tests/fixtures/legacy_flat_v1_smoke10.meta.json`
+- `tests/fixtures/legacy_flat_v1_smoke10.markers.json`
+- `tests/fixtures/PROVENANCE.md`
 - `tests/test_long_run_cleanup.py`
 - `tests/test_migrated_cases.py`
 - `tests/test_parity_polaris.py`
@@ -94,7 +101,8 @@ Then restart Codex or OpenCode.
 - profile 的 `presentation_capture` 是唯一展示值。`tool.log` 只显示 `KEY: 原始捕获值`，不显示正则、规则 ID、捕获字段名、内部关联 ID 或绝对路径。
 - 播放器原始 marker 必须原样显示。`state_class` 仅供去重、窗口和耗时计算，绝不能改写显示文本。
 - 每个活动 case 中到达的事实都立即按顺序显示，包括播报前与异常后；每轮只有一次 `[RESULT]`。必需而缺失的事实在轮末以空值行补齐。
-- 结果目录仅保留 `serial_logs/*.log`、`tool.log`、`results.csv`、`cases.csv`。禁止 `.bin`、`task.log`、`tool_logs`、JSONL 和临时结果文件。
+- v1 结果目录仅保留 `serial_logs/*.log`、`tool.log`、`results.csv`、`cases.csv`；v2 增加 `events.jsonl`、`raw/`、`run.log`、`summary.md`、`summary.json`。禁止 `.bin`、`task.log`、`tool_logs` 和临时结果文件。
+- v2 的结论只由 `events.jsonl` 计算；`gate_pass=false` 时禁止签发 PASS；手改 `run.log`/`summary.*` 会被 `eventlog verify` 判为漂移。
 
 ## 异常与停止
 
@@ -175,6 +183,14 @@ python -u lstest/scripts/lstest.py --help
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json>
 python -u lstest/scripts/lstest.py tts --text-file utterance.txt --voice 付小春 --output audio/sample.wav
 python -u lstest/scripts/lstest.py audio scan --direction Render --json
+python -u lstest/scripts/lstest.py eventlog build --legacy <旧平铺日志> --out-dir <新结果目录> --meta <任务上下文.json>
+python -u lstest/scripts/lstest.py eventlog verify --run-dir <结果目录> [--check-files]
+```
+
+运行全部单元测试（需要 `lstts-core` 可导入）：
+
+```bash
+PYTHONPATH=. python -m unittest discover -s lstest/tests -t .
 ```
 
 详细合同和可复制的项目适配模板见：

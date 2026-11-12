@@ -15,9 +15,11 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 
 try:
+    from .eventlog import EventLogWriter
     from .observations import RawTag, ToolJudgement, raw_tags_from_mappings, render_observation
     from .timeline import TimelineLedger, ToolLogValidator, safe_basename
 except ImportError:  # direct execution fallback
+    from eventlog import EventLogWriter
     from observations import RawTag, ToolJudgement, raw_tags_from_mappings, render_observation
     from timeline import TimelineLedger, ToolLogValidator, safe_basename
 
@@ -342,6 +344,7 @@ class TaskArtifacts:
         terminal_stream: Any | None = None,
         run_name: str | None = None,
         append: bool = False,
+        structured_events: bool = False,
     ):
         if run_name:
             self.run_dir = Path(result_root) / run_name
@@ -363,6 +366,11 @@ class TaskArtifacts:
         self.stop = StopSupervisor(self.run_dir / "STOP")
         self.stop_policy = StopPolicy(self.stop)
         self._lock = threading.RLock()
+        self.event_log = (
+            EventLogWriter(self.run_dir, self.task_id, fsync=False) if structured_events else None
+        )
+        self._event_log_failed = False
+        self.structured_summary: dict[str, Any] | None = None
         self._tool = self.tool_log_path.open("a", encoding="utf-8")
         self._terminal_stream: Any | None = terminal_stream
         self._terminal_mirror_failure_recorded = False
@@ -554,6 +562,14 @@ class TaskArtifacts:
             "message": message,
             "details": values,
         }
+        if self.event_log is not None and not self._event_log_failed:
+            try:
+                payload = dict(known)
+                payload.pop("event", None)
+                self.event_log.emit(event, **payload)
+            except (OSError, ValueError) as error:  # 结构化日志不得中断测试执行
+                self._event_log_failed = True
+                self.add_sticky("TOOL_EXCEPTION", f"结构化事件写入失败: {error}", resource="events.jsonl")
         return self._render_tool_line(event, level, message, known)
 
     def _render_tool_line(self, event: str, level: str, message: str, known: Mapping[str, Any]) -> str:
@@ -1553,6 +1569,15 @@ class TaskArtifacts:
             raw=summary,
             handling="results.csv counts reconciled before final status",
         )
+        if self.event_log is not None and not self._event_log_failed:
+            try:
+                self.structured_summary = self.event_log.finalize(meta={
+                    "title": self.task_id,
+                    "purpose": None,
+                    "scope": None,
+                })
+            except (OSError, ValueError) as error:  # 结构化摘要失败不得改变测试结论
+                self.add_sticky("TOOL_EXCEPTION", f"结构化摘要生成失败: {error}", resource="summary.json")
         for handle in (self._tool, self._csv, self._cases):
             if handle is not None:
                 handle.close()

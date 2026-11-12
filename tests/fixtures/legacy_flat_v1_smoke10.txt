@@ -1,0 +1,1595 @@
+time: 2026-11-12 17:01:56.685
+level: INFO
+event: TASK_START
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: -
+case_id: -
+phase: -
+source: device-x_protocol_v2.py
+device: -
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: -
+rule_id: -
+expected: {"mode": "smoke", "target_rounds": 10}
+actual: {"mode": "smoke", "target_rounds": 10}
+raw: {"node": "node-a", "user": "<user>", "python": "3.9.13", "platform": "Windows-10-10.0.26200-SP0", "pid": 6056, "cwd": "D:\\tasks\\NOAH-67"}
+normalized: -
+handling: -
+evidence: -
+message: -
+details: {"runtime": "node-a 本机隐藏后台（WMI -> pythonw supervisor -> python）", "task_dir": "D:\\tasks\\NOAH-67", "result_dir": "D:\\tasks\\NOAH-67\\result\\device-x-protocol-v2-smoke10-20261112-170155", "lstest_contract": "references/result-log-standard.md", "lstest_ref_sha256": {"SKILL.md": "605F76A602851F03602A6D71632F34A1A9C37A31B4A748CA38BE6114E1FA99AA", "references/result-log-standard.md": "B44728A2619DDE631A4C494F629658D5375D5D0154F6898D1689BC207C5177C4", "references/acceptance.md": "A8266F114F83F7F06F52F5ED16C745D17D36D033CBEAAB97C6F97F300BC570E9", "scripts/core.py": "602271E9526F1E1E3E953BADC836817D7712C78F2B1AA5D3ACD9260A66E01275"}, "profile_id": "device-x-venusa-csk7003j7u", "profile_version": "profile schema_version=2 / voice_markers 2026.08.11", "wake_wav": "D:\\tasks\\NOAH-67\\assets\\wake_ref_16k_trim400ms.wav", "wake_wav_sha256": "b35620c7efd8aa57e228df4b13789f17a37a8120e6e77c33aa7b7fb5285379fe", "wake_wav_format": {"rate": 16000, "ch": 1, "width": 2, "frames": 23552, "sec": 1.472}, "gap_policy": "round 1-3: 1.00s; round 4+: 1.50s (play_end -> next play_start)"}
+
+time: 2026-11-12 17:01:56.685
+level: INFO
+event: DEVICE_BINDING
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: -
+case_id: -
+phase: -
+source: -
+device: USB\VID_CAFE&PID_0010
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: -
+rule_id: -
+expected: -
+actual: -
+raw: {"pdu_ip": "192.0.2.10", "pdu_socket": 1, "pdu_off_sec": 20, "baud": 921600}
+normalized: -
+handling: -
+evidence: -
+message: -
+details: {"playback": {"index": 6, "name": "扬声器 (Realtek(R) Audio)", "host_api": "MME"}, "record": {"index": 22, "name": "麦克风 (UAC Audio)", "host_api": "Windows WASAPI", "channels": 8, "format": "pcm_s16le 16000Hz 8ch"}}
+
+time: 2026-11-12 17:01:56.685
+level: INFO
+event: SERIAL_OPEN
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: -
+case_id: -
+phase: -
+source: -
+device: -
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: -
+rule_id: -
+expected: -
+actual: -
+raw: -
+normalized: -
+handling: -
+evidence: ["serial_logs/serial_COM4_csk.log#000001"]
+message: COM4 已打开并全程保持同一句柄
+details: {"baud": 921600}
+
+time: 2026-11-12 17:02:22.527
+level: INFO
+event: PDU_CYCLE
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 1
+case_id: wake-0001
+phase: power_cycle
+source: pduControl.exe
+device: USB\VID_CAFE&PID_0010
+port_role: -
+action_id: pdu-reboot-0001
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: pdu_returncode_0
+attempt: -
+max_attempts: -
+elapsed_ms: 24326
+rule_id: -
+expected: {"ip": "192.0.2.10", "socket": 1, "off_sec": 20}
+actual: {"rc": 0, "elapsed_ms": 24326, "power_on_at": "2026-11-12 17:02:22.527"}
+raw: {"stdout_stderr": "开始给设备上硬重启，间隔20s\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查断电状态，当前状态为2\r\n第1个插座，断电成功！\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查上电状态，当前状态为1\r\n第1个插座， ！\r\n设备硬重启完成\r\n"}
+normalized: -
+handling: -
+evidence: ["tool.log"]
+message: PDU 断电 20s 后上电，t=0.00s 基准 2026-11-12 17:02:22.527
+details: -
+
+time: 2026-11-12 17:02:25.183
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 1
+case_id: wake-0001
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0001-A01
+broadcast_id: R0001-A01
+correlation_id: -
+status: NO_WAKE
+reason: -
+attempt: 1
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake_raw_any": ["send asr event: WAKEUP", "\"bMain\":1"]}
+actual: {"wake_seen": false, "start_seen": false}
+raw: {"play_start": "2026-11-12 17:02:22.527", "play_end": "2026-11-12 17:02:24.183"}
+normalized: {"play_start_offset_s": 0.0, "play_end_offset_s": 1.656, "next_gap_s": 1.0, "wake_check_window_s": 1.0}
+handling: continue
+evidence: -
+message: 第 1 次播报未唤醒
+details: -
+
+time: 2026-11-12 17:02:27.171
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 1
+case_id: wake-0001
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0001-A02
+broadcast_id: R0001-A02
+correlation_id: -
+status: PASS
+reason: -
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake": true, "response_complete": true}
+actual: {"wake": true, "response_start_offset_s": 4.077, "response_complete_offset_s": 4.629}
+raw: {"wake_raw": ["[2026-01-01 00:00:02.513][D][evs_event # algo] Pre Wakeup: {\"rlt\":[{\"istart\":29,\"iresid\":1,\"iduration\":13,\"nfillerscore\":344,\"nkeywordscore\":12087,\"ncm\":871,\"ncmThreshold\":800,\"keyword\":\"da2 kai1 kong1 tiao2\",\"intent\":\"da2 kai1 kong1 tiao2\",\"bMain\":1,\"bAbsorb\":0,\"bMhx\":0}]}"], "start_raw": "[2026-01-01 00:00:02.712][I][evs_event # hs_hal_svc] start player: source=TONE_ID(0)", "complete_raw": "[2026-01-01 00:00:03.614][D][player_0_td # PA_MGR] Refresh PA to OFF, timeout 30000, by \"tone_player_end\""}
+normalized: {"play_start_offset_s": 2.656, "play_end_offset_s": 3.957, "next_gap_s": null}
+handling: stop_round
+evidence: -
+message: 第 2 次播报唤醒且响应播放完成
+details: -
+
+time: 2026-11-12 17:02:29.217
+level: INFO
+event: RECORDING
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 1
+case_id: wake-0001
+phase: record_open
+source: -
+device: 麦克风 (UAC Audio)
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: 31016
+rule_id: -
+expected: {"channels": 8, "rate": 16000, "format": "pcm_s16le", "one_pcm_per_round": true}
+actual: {"file": "R00001_20261112-170222.pcm", "bytes": 1294336, "sec": 5.056, "sha256": "ae156cb06064cf89cd734e678a27631972854bd9964f0e7c8ba0ed75d284410d", "open_attempts": 11, "recording_start_offset_s": 1.588}
+raw: -
+normalized: -
+handling: -
+evidence: ["recoder/R00001_20261112-170222.pcm"]
+message: 本轮唯一 PCM 已开启并结束
+details: -
+
+time: 2026-11-12 17:02:29.222
+level: INFO
+event: ROUND_RESULT
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 1
+case_id: wake-0001
+phase: round_end
+source: -
+device: USB\VID_CAFE&PID_0010
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: all_checks_pass
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"required_checks": "all true", "result": "PASS"}
+actual: {"result": "PASS", "attempts_total": 2, "first_success_attempt": 2, "first_play_start_offset_s": 0.0, "recording_start_offset_s": 1.588, "first_wakeup_offset_s": 3.807}
+raw: {"checks": {"pdu_rc_0": true, "pdu_off_hold_ge_18s": true, "boot_seen": true, "record_opened": true, "record_format_8ch_16k_16bit": true, "first_play_immediate_le_0.5s": true, "wav_trimmed_used": true, "attempts_le_10": true, "response_complete_when_success": true, "post_record_2s_when_success": true, "serial_read_errors_zero": true}, "no_wakeup_attempts": [1]}
+normalized: {"cumulative": {"pass": 1, "fail": 0, "blocked": 0, "success_rate": 100.0, "no_wakeup_total": 1, "attempts_total": 2}}
+handling: -
+evidence: ["serial_logs/serial_COM4_csk.log#000002", "recoder/R00001_20261112-170222.pcm", "results.csv#round-1"]
+message: R1 PASS（attempts=2, first_play=0.000s）
+details: -
+
+time: 2026-11-12 17:02:53.499
+level: INFO
+event: PDU_CYCLE
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 2
+case_id: wake-0002
+phase: power_cycle
+source: pduControl.exe
+device: USB\VID_CAFE&PID_0010
+port_role: -
+action_id: pdu-reboot-0002
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: pdu_returncode_0
+attempt: -
+max_attempts: -
+elapsed_ms: 24267
+rule_id: -
+expected: {"ip": "192.0.2.10", "socket": 1, "off_sec": 20}
+actual: {"rc": 0, "elapsed_ms": 24267, "power_on_at": "2026-11-12 17:02:53.499"}
+raw: {"stdout_stderr": "开始给设备上硬重启，间隔20s\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查断电状态，当前状态为2\r\n第1个插座，断电成功！\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查上电状态，当前状态为1\r\n第1个插座， ！\r\n设备硬重启完成\r\n"}
+normalized: -
+handling: -
+evidence: ["tool.log"]
+message: PDU 断电 20s 后上电，t=0.00s 基准 2026-11-12 17:02:53.499
+details: -
+
+time: 2026-11-12 17:02:56.137
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 2
+case_id: wake-0002
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0002-A01
+broadcast_id: R0002-A01
+correlation_id: -
+status: NO_WAKE
+reason: -
+attempt: 1
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake_raw_any": ["send asr event: WAKEUP", "\"bMain\":1"]}
+actual: {"wake_seen": false, "start_seen": false}
+raw: {"play_start": "2026-11-12 17:02:53.499", "play_end": "2026-11-12 17:02:55.133"}
+normalized: {"play_start_offset_s": 0.0, "play_end_offset_s": 1.634, "next_gap_s": 1.0, "wake_check_window_s": 1.0}
+handling: continue
+evidence: -
+message: 第 1 次播报未唤醒
+details: -
+
+time: 2026-11-12 17:02:58.130
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 2
+case_id: wake-0002
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0002-A02
+broadcast_id: R0002-A02
+correlation_id: -
+status: PASS
+reason: -
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake": true, "response_complete": true}
+actual: {"wake": true, "response_start_offset_s": 4.079, "response_complete_offset_s": 4.621}
+raw: {"wake_raw": ["[2026-01-01 00:00:02.355][D][evs_event # algo] Pre Wakeup: {\"rlt\":[{\"istart\":23,\"iresid\":1,\"iduration\":15,\"nfillerscore\":1047,\"nkeywordscore\":13554,\"ncm\":908,\"ncmThreshold\":800,\"keyword\":\"da2 kai1 kong1 tiao2\",\"intent\":\"da2 kai1 kong1 tiao2\",\"bMain\":1,\"bAbsorb\":0,\"bMhx\":0}]}"], "start_raw": "[2026-01-01 00:00:02.555][I][evs_event # hs_hal_svc] start player: source=TONE_ID(0)", "complete_raw": "[2026-01-01 00:00:03.319][D][player_0_td # PA_MGR] Refresh PA to OFF, timeout 30000, by \"tone_player_end\""}
+normalized: {"play_start_offset_s": 2.638, "play_end_offset_s": 3.994, "next_gap_s": null}
+handling: stop_round
+evidence: -
+message: 第 2 次播报唤醒且响应播放完成
+details: -
+
+time: 2026-11-12 17:03:00.163
+level: INFO
+event: RECORDING
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 2
+case_id: wake-0002
+phase: record_open
+source: -
+device: 麦克风 (UAC Audio)
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: 30931
+rule_id: -
+expected: {"channels": 8, "rate": 16000, "format": "pcm_s16le", "one_pcm_per_round": true}
+actual: {"file": "R00002_20261112-170253.pcm", "bytes": 1277952, "sec": 4.992, "sha256": "5a0f5f108d7906a0b05ad58544110ada1e50cf6652fcc545ce995a53c4e5f367", "open_attempts": 11, "recording_start_offset_s": 1.626}
+raw: -
+normalized: -
+handling: -
+evidence: ["recoder/R00002_20261112-170253.pcm"]
+message: 本轮唯一 PCM 已开启并结束
+details: -
+
+time: 2026-11-12 17:03:00.171
+level: INFO
+event: ROUND_RESULT
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 2
+case_id: wake-0002
+phase: round_end
+source: -
+device: USB\VID_CAFE&PID_0010
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: all_checks_pass
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"required_checks": "all true", "result": "PASS"}
+actual: {"result": "PASS", "attempts_total": 2, "first_success_attempt": 2, "first_play_start_offset_s": 0.0, "recording_start_offset_s": 1.626, "first_wakeup_offset_s": 3.803}
+raw: {"checks": {"pdu_rc_0": true, "pdu_off_hold_ge_18s": true, "boot_seen": true, "record_opened": true, "record_format_8ch_16k_16bit": true, "first_play_immediate_le_0.5s": true, "wav_trimmed_used": true, "attempts_le_10": true, "response_complete_when_success": true, "post_record_2s_when_success": true, "serial_read_errors_zero": true}, "no_wakeup_attempts": [1]}
+normalized: {"cumulative": {"pass": 2, "fail": 0, "blocked": 0, "success_rate": 100.0, "no_wakeup_total": 2, "attempts_total": 4}}
+handling: -
+evidence: ["serial_logs/serial_COM4_csk.log#000304", "recoder/R00002_20261112-170253.pcm", "results.csv#round-2"]
+message: R2 PASS（attempts=2, first_play=0.000s）
+details: -
+
+time: 2026-11-12 17:03:23.321
+level: INFO
+event: PDU_CYCLE
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 3
+case_id: wake-0003
+phase: power_cycle
+source: pduControl.exe
+device: USB\VID_CAFE&PID_0010
+port_role: -
+action_id: pdu-reboot-0003
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: pdu_returncode_0
+attempt: -
+max_attempts: -
+elapsed_ms: 23150
+rule_id: -
+expected: {"ip": "192.0.2.10", "socket": 1, "off_sec": 20}
+actual: {"rc": 0, "elapsed_ms": 23150, "power_on_at": "2026-11-12 17:03:23.321"}
+raw: {"stdout_stderr": "开始给设备上硬重启，间隔20s\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查断电状态，当前状态为2\r\n第1个插座，断电成功！\r\n<Response [200]>\r\n服务器正常\r\n第1个插座， ！\r\n设备硬重启完成\r\n"}
+normalized: -
+handling: -
+evidence: ["tool.log"]
+message: PDU 断电 20s 后上电，t=0.00s 基准 2026-11-12 17:03:23.321
+details: -
+
+time: 2026-11-12 17:03:25.978
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 3
+case_id: wake-0003
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0003-A01
+broadcast_id: R0003-A01
+correlation_id: -
+status: NO_WAKE
+reason: -
+attempt: 1
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake_raw_any": ["send asr event: WAKEUP", "\"bMain\":1"]}
+actual: {"wake_seen": false, "start_seen": false}
+raw: {"play_start": "2026-11-12 17:03:23.321", "play_end": "2026-11-12 17:03:24.973"}
+normalized: {"play_start_offset_s": 0.0, "play_end_offset_s": 1.652, "next_gap_s": 1.0, "wake_check_window_s": 1.0}
+handling: continue
+evidence: -
+message: 第 1 次播报未唤醒
+details: -
+
+time: 2026-11-12 17:03:27.912
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 3
+case_id: wake-0003
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0003-A02
+broadcast_id: R0003-A02
+correlation_id: -
+status: PASS
+reason: -
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake": true, "response_complete": true}
+actual: {"wake": true, "response_start_offset_s": 4.037, "response_complete_offset_s": 4.581}
+raw: {"wake_raw": ["[2026-01-01 00:00:02.008][D][evs_event # algo] Pre Wakeup: {\"rlt\":[{\"istart\":1,\"iresid\":1,\"iduration\":19,\"nfillerscore\":820,\"nkeywordscore\":18000,\"ncm\":1011,\"ncmThreshold\":800,\"keyword\":\"da2 kai1 kong1 tiao2\",\"intent\":\"da2 kai1 kong1 tiao2\",\"bMain\":1,\"bAbsorb\":0,\"bMhx\":0}]}", "[2026-01-01 00:00:02.074][I][algo_task # algo] wakeup result: bMain=1 branch=3 custom=0 keyword=da2 kai1 kong1 tiao2", "[2026-01-01 00:00:02.074][D][algo_task # app_client] Wakeup: {\"rlt\":[{\"istart\":2,\"iresid\":2,\"iduration\":20,\"nfillerscore\":0,\"nkeywordscore\":0,\"ncm\":-34,\"ncmThreshold\":-57,\"keyword\":\"da2 kai1 kong1 tiao2\",\"intent\":\"da2 kai1 kong1 tiao2\",\"nRltIdx\":0,\"nDelayFrame\":0,\"nThrowFrame\":22,\"decId\":1,\"branch\":3,\"wakeUpType\":0,\"VadGap\":0,\"nE2eIntervalFrame\":10,\"nE2eNodeFrame\":2,\"nStartStateThreshold\":0,\"bMain\":1,\"bAbsorb\":0,\"bMhx\":0,\"nLanThreshold\":0,\"nLanNcm\":0,\"iframe\":42}]}", "[2026-01-01 00:00:02.085][D][evs_event # hs_hal_svc] send asr event: WAKEUP(0)"], "start_raw": "[2026-01-01 00:00:02.119][I][evs_event # hs_hal_svc] start player: source=TONE_ID(0)", "complete_raw": "[2026-01-01 00:00:02.734][D][player_0_td # PA_MGR] Refresh PA to OFF, timeout 30000, by \"tone_player_end\""}
+normalized: {"play_start_offset_s": 2.657, "play_end_offset_s": 3.991, "next_gap_s": null}
+handling: stop_round
+evidence: -
+message: 第 2 次播报唤醒且响应播放完成
+details: -
+
+time: 2026-11-12 17:03:29.968
+level: INFO
+event: RECORDING
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 3
+case_id: wake-0003
+phase: record_open
+source: -
+device: 麦克风 (UAC Audio)
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: 29797
+rule_id: -
+expected: {"channels": 8, "rate": 16000, "format": "pcm_s16le", "one_pcm_per_round": true}
+actual: {"file": "R00003_20261112-170323.pcm", "bytes": 1081344, "sec": 4.224, "sha256": "4e2293bac8e0f4471f2c635c2fe2c7ace725085d7f7faf347cdeccb1e0ec5521", "open_attempts": 16, "recording_start_offset_s": 2.388}
+raw: -
+normalized: -
+handling: -
+evidence: ["recoder/R00003_20261112-170323.pcm"]
+message: 本轮唯一 PCM 已开启并结束
+details: -
+
+time: 2026-11-12 17:03:29.978
+level: INFO
+event: ROUND_RESULT
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 3
+case_id: wake-0003
+phase: round_end
+source: -
+device: USB\VID_CAFE&PID_0010
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: all_checks_pass
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"required_checks": "all true", "result": "PASS"}
+actual: {"result": "PASS", "attempts_total": 2, "first_success_attempt": 2, "first_play_start_offset_s": 0.0, "recording_start_offset_s": 2.388, "first_wakeup_offset_s": 4.037}
+raw: {"checks": {"pdu_rc_0": true, "pdu_off_hold_ge_18s": true, "boot_seen": true, "record_opened": true, "record_format_8ch_16k_16bit": true, "first_play_immediate_le_0.5s": true, "wav_trimmed_used": true, "attempts_le_10": true, "response_complete_when_success": true, "post_record_2s_when_success": true, "serial_read_errors_zero": true}, "no_wakeup_attempts": [1]}
+normalized: {"cumulative": {"pass": 3, "fail": 0, "blocked": 0, "success_rate": 100.0, "no_wakeup_total": 3, "attempts_total": 6}}
+handling: -
+evidence: ["serial_logs/serial_COM4_csk.log#000602", "recoder/R00003_20261112-170323.pcm", "results.csv#round-3"]
+message: R3 PASS（attempts=2, first_play=0.000s）
+details: -
+
+time: 2026-11-12 17:03:54.221
+level: INFO
+event: PDU_CYCLE
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 4
+case_id: wake-0004
+phase: power_cycle
+source: pduControl.exe
+device: USB\VID_CAFE&PID_0010
+port_role: -
+action_id: pdu-reboot-0004
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: pdu_returncode_0
+attempt: -
+max_attempts: -
+elapsed_ms: 24242
+rule_id: -
+expected: {"ip": "192.0.2.10", "socket": 1, "off_sec": 20}
+actual: {"rc": 0, "elapsed_ms": 24242, "power_on_at": "2026-11-12 17:03:54.221"}
+raw: {"stdout_stderr": "开始给设备上硬重启，间隔20s\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查断电状态，当前状态为2\r\n第1个插座，断电成功！\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查上电状态，当前状态为1\r\n第1个插座， ！\r\n设备硬重启完成\r\n"}
+normalized: -
+handling: -
+evidence: ["tool.log"]
+message: PDU 断电 20s 后上电，t=0.00s 基准 2026-11-12 17:03:54.221
+details: -
+
+time: 2026-11-12 17:03:57.375
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 4
+case_id: wake-0004
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0004-A01
+broadcast_id: R0004-A01
+correlation_id: -
+status: NO_WAKE
+reason: -
+attempt: 1
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake_raw_any": ["send asr event: WAKEUP", "\"bMain\":1"]}
+actual: {"wake_seen": false, "start_seen": false}
+raw: {"play_start": "2026-11-12 17:03:54.221", "play_end": "2026-11-12 17:03:55.868"}
+normalized: {"play_start_offset_s": 0.0, "play_end_offset_s": 1.647, "next_gap_s": 1.5, "wake_check_window_s": 1.5}
+handling: continue
+evidence: -
+message: 第 1 次播报未唤醒
+details: -
+
+time: 2026-11-12 17:03:59.306
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 4
+case_id: wake-0004
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0004-A02
+broadcast_id: R0004-A02
+correlation_id: -
+status: PASS
+reason: -
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake": true, "response_complete": true}
+actual: {"wake": true, "response_start_offset_s": 4.525, "response_complete_offset_s": 5.075}
+raw: {"wake_raw": ["[2026-01-01 00:00:03.008][D][evs_event # algo] Pre Wakeup: {\"rlt\":[{\"istart\":35,\"iresid\":1,\"iduration\":18,\"nfillerscore\":747,\"nkeywordscore\":15915,\"ncm\":955,\"ncmThreshold\":800,\"keyword\":\"da2 kai1 kong1 tiao2\",\"intent\":\"da2 kai1 kong1 tiao2\",\"bMain\":1,\"bAbsorb\":0,\"bMhx\":0}]}"], "start_raw": "[2026-01-01 00:00:03.220][I][evs_event # hs_hal_svc] start player: source=TONE_ID(0)", "complete_raw": "[2026-01-01 00:00:03.825][D][player_0_td # PA_MGR] Refresh PA to OFF, timeout 30000, by \"tone_player_end\""}
+normalized: {"play_start_offset_s": 3.154, "play_end_offset_s": 4.455, "next_gap_s": null}
+handling: stop_round
+evidence: -
+message: 第 2 次播报唤醒且响应播放完成
+details: -
+
+time: 2026-11-12 17:04:01.376
+level: INFO
+event: RECORDING
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 4
+case_id: wake-0004
+phase: record_open
+source: -
+device: 麦克风 (UAC Audio)
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: 31397
+rule_id: -
+expected: {"channels": 8, "rate": 16000, "format": "pcm_s16le", "one_pcm_per_round": true}
+actual: {"file": "R00004_20261112-170354.pcm", "bytes": 1409024, "sec": 5.504, "sha256": "5107a0b740a9fdc55807f12376717b302055ba588e430dc6588bbbe1059615ee", "open_attempts": 11, "recording_start_offset_s": 1.621}
+raw: -
+normalized: -
+handling: -
+evidence: ["recoder/R00004_20261112-170354.pcm"]
+message: 本轮唯一 PCM 已开启并结束
+details: -
+
+time: 2026-11-12 17:04:01.386
+level: INFO
+event: ROUND_RESULT
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 4
+case_id: wake-0004
+phase: round_end
+source: -
+device: USB\VID_CAFE&PID_0010
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: all_checks_pass
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"required_checks": "all true", "result": "PASS"}
+actual: {"result": "PASS", "attempts_total": 2, "first_success_attempt": 2, "first_play_start_offset_s": 0.0, "recording_start_offset_s": 1.621, "first_wakeup_offset_s": 4.254}
+raw: {"checks": {"pdu_rc_0": true, "pdu_off_hold_ge_18s": true, "boot_seen": true, "record_opened": true, "record_format_8ch_16k_16bit": true, "first_play_immediate_le_0.5s": true, "wav_trimmed_used": true, "attempts_le_10": true, "response_complete_when_success": true, "post_record_2s_when_success": true, "serial_read_errors_zero": true}, "no_wakeup_attempts": [1]}
+normalized: {"cumulative": {"pass": 4, "fail": 0, "blocked": 0, "success_rate": 100.0, "no_wakeup_total": 4, "attempts_total": 8}}
+handling: -
+evidence: ["serial_logs/serial_COM4_csk.log#000903", "recoder/R00004_20261112-170354.pcm", "results.csv#round-4"]
+message: R4 PASS（attempts=2, first_play=0.000s）
+details: -
+
+time: 2026-11-12 17:04:25.752
+level: INFO
+event: PDU_CYCLE
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 5
+case_id: wake-0005
+phase: power_cycle
+source: pduControl.exe
+device: USB\VID_CAFE&PID_0010
+port_role: -
+action_id: pdu-reboot-0005
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: pdu_returncode_0
+attempt: -
+max_attempts: -
+elapsed_ms: 24366
+rule_id: -
+expected: {"ip": "192.0.2.10", "socket": 1, "off_sec": 20}
+actual: {"rc": 0, "elapsed_ms": 24366, "power_on_at": "2026-11-12 17:04:25.752"}
+raw: {"stdout_stderr": "开始给设备上硬重启，间隔20s\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查断电状态，当前状态为2\r\n第1个插座，断电成功！\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查上电状态，当前状态为1\r\n第1个插座， ！\r\n设备硬重启完成\r\n"}
+normalized: -
+handling: -
+evidence: ["tool.log"]
+message: PDU 断电 20s 后上电，t=0.00s 基准 2026-11-12 17:04:25.752
+details: -
+
+time: 2026-11-12 17:04:28.901
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 5
+case_id: wake-0005
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0005-A01
+broadcast_id: R0005-A01
+correlation_id: -
+status: NO_WAKE
+reason: -
+attempt: 1
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake_raw_any": ["send asr event: WAKEUP", "\"bMain\":1"]}
+actual: {"wake_seen": false, "start_seen": false}
+raw: {"play_start": "2026-11-12 17:04:25.752", "play_end": "2026-11-12 17:04:27.393"}
+normalized: {"play_start_offset_s": 0.0, "play_end_offset_s": 1.641, "next_gap_s": 1.5, "wake_check_window_s": 1.5}
+handling: continue
+evidence: -
+message: 第 1 次播报未唤醒
+details: -
+
+time: 2026-11-12 17:04:30.824
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 5
+case_id: wake-0005
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0005-A02
+broadcast_id: R0005-A02
+correlation_id: -
+status: PASS
+reason: -
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake": true, "response_complete": true}
+actual: {"wake": true, "response_start_offset_s": 4.514, "response_complete_offset_s": 5.061}
+raw: {"wake_raw": ["[2026-01-01 00:00:03.008][D][evs_event # algo] Pre Wakeup: {\"rlt\":[{\"istart\":37,\"iresid\":1,\"iduration\":18,\"nfillerscore\":805,\"nkeywordscore\":15316,\"ncm\":929,\"ncmThreshold\":800,\"keyword\":\"da2 kai1 kong1 tiao2\",\"intent\":\"da2 kai1 kong1 tiao2\",\"bMain\":1,\"bAbsorb\":0,\"bMhx\":0}]}"], "start_raw": "[2026-01-01 00:00:03.207][I][evs_event # hs_hal_svc] start player: source=TONE_ID(0)", "complete_raw": "[2026-01-01 00:00:03.825][D][player_0_td # PA_MGR] Refresh PA to OFF, timeout 30000, by \"tone_player_end\""}
+normalized: {"play_start_offset_s": 3.149, "play_end_offset_s": 4.451, "next_gap_s": null}
+handling: stop_round
+evidence: -
+message: 第 2 次播报唤醒且响应播放完成
+details: -
+
+time: 2026-11-12 17:04:32.875
+level: INFO
+event: RECORDING
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 5
+case_id: wake-0005
+phase: record_open
+source: -
+device: 麦克风 (UAC Audio)
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: 31488
+rule_id: -
+expected: {"channels": 8, "rate": 16000, "format": "pcm_s16le", "one_pcm_per_round": true}
+actual: {"file": "R00005_20261112-170425.pcm", "bytes": 1441792, "sec": 5.632, "sha256": "3f32270bcf3b15b4f2177b369e2e327382228c44430a355298c58a85e94c5080", "open_attempts": 10, "recording_start_offset_s": 1.451}
+raw: -
+normalized: -
+handling: -
+evidence: ["recoder/R00005_20261112-170425.pcm"]
+message: 本轮唯一 PCM 已开启并结束
+details: -
+
+time: 2026-11-12 17:04:32.885
+level: INFO
+event: ROUND_RESULT
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 5
+case_id: wake-0005
+phase: round_end
+source: -
+device: USB\VID_CAFE&PID_0010
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: all_checks_pass
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"required_checks": "all true", "result": "PASS"}
+actual: {"result": "PASS", "attempts_total": 2, "first_success_attempt": 2, "first_play_start_offset_s": 0.0, "recording_start_offset_s": 1.451, "first_wakeup_offset_s": 4.248}
+raw: {"checks": {"pdu_rc_0": true, "pdu_off_hold_ge_18s": true, "boot_seen": true, "record_opened": true, "record_format_8ch_16k_16bit": true, "first_play_immediate_le_0.5s": true, "wav_trimmed_used": true, "attempts_le_10": true, "response_complete_when_success": true, "post_record_2s_when_success": true, "serial_read_errors_zero": true}, "no_wakeup_attempts": [1]}
+normalized: {"cumulative": {"pass": 5, "fail": 0, "blocked": 0, "success_rate": 100.0, "no_wakeup_total": 5, "attempts_total": 10}}
+handling: -
+evidence: ["serial_logs/serial_COM4_csk.log#001204", "recoder/R00005_20261112-170425.pcm", "results.csv#round-5"]
+message: R5 PASS（attempts=2, first_play=0.000s）
+details: -
+
+time: 2026-11-12 17:04:57.117
+level: INFO
+event: PDU_CYCLE
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 6
+case_id: wake-0006
+phase: power_cycle
+source: pduControl.exe
+device: USB\VID_CAFE&PID_0010
+port_role: -
+action_id: pdu-reboot-0006
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: pdu_returncode_0
+attempt: -
+max_attempts: -
+elapsed_ms: 24231
+rule_id: -
+expected: {"ip": "192.0.2.10", "socket": 1, "off_sec": 20}
+actual: {"rc": 0, "elapsed_ms": 24231, "power_on_at": "2026-11-12 17:04:57.117"}
+raw: {"stdout_stderr": "开始给设备上硬重启，间隔20s\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查断电状态，当前状态为2\r\n第1个插座，断电成功！\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查上电状态，当前状态为1\r\n第1个插座， ！\r\n设备硬重启完成\r\n"}
+normalized: -
+handling: -
+evidence: ["tool.log"]
+message: PDU 断电 20s 后上电，t=0.00s 基准 2026-11-12 17:04:57.117
+details: -
+
+time: 2026-11-12 17:05:00.268
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 6
+case_id: wake-0006
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0006-A01
+broadcast_id: R0006-A01
+correlation_id: -
+status: NO_WAKE
+reason: -
+attempt: 1
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake_raw_any": ["send asr event: WAKEUP", "\"bMain\":1"]}
+actual: {"wake_seen": false, "start_seen": false}
+raw: {"play_start": "2026-11-12 17:04:57.117", "play_end": "2026-11-12 17:04:58.761"}
+normalized: {"play_start_offset_s": 0.0, "play_end_offset_s": 1.644, "next_gap_s": 1.5, "wake_check_window_s": 1.5}
+handling: continue
+evidence: -
+message: 第 1 次播报未唤醒
+details: -
+
+time: 2026-11-12 17:05:02.317
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 6
+case_id: wake-0006
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0006-A02
+broadcast_id: R0006-A02
+correlation_id: -
+status: PASS
+reason: -
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake": true, "response_complete": true}
+actual: {"wake": true, "response_start_offset_s": 4.656, "response_complete_offset_s": 5.2}
+raw: {"wake_raw": ["[2026-01-01 00:00:03.008][D][evs_event # algo] Pre Wakeup: {\"rlt\":[{\"istart\":36,\"iresid\":1,\"iduration\":13,\"nfillerscore\":717,\"nkeywordscore\":12434,\"ncm\":840,\"ncmThreshold\":800,\"keyword\":\"da2 kai1 kong1 tiao2\",\"intent\":\"da2 kai1 kong1 tiao2\",\"bMain\":1,\"bAbsorb\":0,\"bMhx\":0}]}"], "start_raw": "[2026-01-01 00:00:03.312][I][evs_event # hs_hal_svc] start player: source=TONE_ID(0)", "complete_raw": "[2026-01-01 00:00:03.929][D][player_0_td # PA_MGR] Refresh PA to OFF, timeout 30000, by \"tone_player_end\""}
+normalized: {"play_start_offset_s": 3.151, "play_end_offset_s": 4.485, "next_gap_s": null}
+handling: stop_round
+evidence: -
+message: 第 2 次播报唤醒且响应播放完成
+details: -
+
+time: 2026-11-12 17:05:04.371
+level: INFO
+event: RECORDING
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 6
+case_id: wake-0006
+phase: record_open
+source: -
+device: 麦克风 (UAC Audio)
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: 31485
+rule_id: -
+expected: {"channels": 8, "rate": 16000, "format": "pcm_s16le", "one_pcm_per_round": true}
+actual: {"file": "R00006_20261112-170457.pcm", "bytes": 1392640, "sec": 5.44, "sha256": "25ed59e1586ada57c9690162bbb893722d7227ee2b6402578d0e72d2028cceca", "open_attempts": 12, "recording_start_offset_s": 1.785}
+raw: -
+normalized: -
+handling: -
+evidence: ["recoder/R00006_20261112-170457.pcm"]
+message: 本轮唯一 PCM 已开启并结束
+details: -
+
+time: 2026-11-12 17:05:04.392
+level: INFO
+event: ROUND_RESULT
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 6
+case_id: wake-0006
+phase: round_end
+source: -
+device: USB\VID_CAFE&PID_0010
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: all_checks_pass
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"required_checks": "all true", "result": "PASS"}
+actual: {"result": "PASS", "attempts_total": 2, "first_success_attempt": 2, "first_play_start_offset_s": 0.0, "recording_start_offset_s": 1.785, "first_wakeup_offset_s": 4.276}
+raw: {"checks": {"pdu_rc_0": true, "pdu_off_hold_ge_18s": true, "boot_seen": true, "record_opened": true, "record_format_8ch_16k_16bit": true, "first_play_immediate_le_0.5s": true, "wav_trimmed_used": true, "attempts_le_10": true, "response_complete_when_success": true, "post_record_2s_when_success": true, "serial_read_errors_zero": true}, "no_wakeup_attempts": [1]}
+normalized: {"cumulative": {"pass": 6, "fail": 0, "blocked": 0, "success_rate": 100.0, "no_wakeup_total": 6, "attempts_total": 12}}
+handling: -
+evidence: ["serial_logs/serial_COM4_csk.log#001505", "recoder/R00006_20261112-170457.pcm", "results.csv#round-6"]
+message: R6 PASS（attempts=2, first_play=0.000s）
+details: -
+
+time: 2026-11-12 17:05:27.532
+level: INFO
+event: PDU_CYCLE
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 7
+case_id: wake-0007
+phase: power_cycle
+source: pduControl.exe
+device: USB\VID_CAFE&PID_0010
+port_role: -
+action_id: pdu-reboot-0007
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: pdu_returncode_0
+attempt: -
+max_attempts: -
+elapsed_ms: 23140
+rule_id: -
+expected: {"ip": "192.0.2.10", "socket": 1, "off_sec": 20}
+actual: {"rc": 0, "elapsed_ms": 23140, "power_on_at": "2026-11-12 17:05:27.532"}
+raw: {"stdout_stderr": "开始给设备上硬重启，间隔20s\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查断电状态，当前状态为2\r\n第1个插座，断电成功！\r\n<Response [200]>\r\n服务器正常\r\n第1个插座， ！\r\n设备硬重启完成\r\n"}
+normalized: -
+handling: -
+evidence: ["tool.log"]
+message: PDU 断电 20s 后上电，t=0.00s 基准 2026-11-12 17:05:27.532
+details: -
+
+time: 2026-11-12 17:05:30.660
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 7
+case_id: wake-0007
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0007-A01
+broadcast_id: R0007-A01
+correlation_id: -
+status: NO_WAKE
+reason: -
+attempt: 1
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake_raw_any": ["send asr event: WAKEUP", "\"bMain\":1"]}
+actual: {"wake_seen": false, "start_seen": false}
+raw: {"play_start": "2026-11-12 17:05:27.532", "play_end": "2026-11-12 17:05:29.153"}
+normalized: {"play_start_offset_s": 0.0, "play_end_offset_s": 1.621, "next_gap_s": 1.5, "wake_check_window_s": 1.5}
+handling: continue
+evidence: -
+message: 第 1 次播报未唤醒
+details: -
+
+time: 2026-11-12 17:05:32.634
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 7
+case_id: wake-0007
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0007-A02
+broadcast_id: R0007-A02
+correlation_id: -
+status: PASS
+reason: -
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake": true, "response_complete": true}
+actual: {"wake": true, "response_start_offset_s": 4.543, "response_complete_offset_s": 5.092}
+raw: {"wake_raw": ["[2026-01-01 00:00:02.034][D][evs_event # algo] Pre Wakeup: {\"rlt\":[{\"istart\":1,\"iresid\":1,\"iduration\":30,\"nfillerscore\":699,\"nkeywordscore\":17144,\"ncm\":837,\"ncmThreshold\":800,\"keyword\":\"da2 kai1 kong1 tiao2\",\"intent\":\"da2 kai1 kong1 tiao2\",\"bMain\":1,\"bAbsorb\":0,\"bMhx\":0}]}"], "start_raw": "[2026-01-01 00:00:02.234][I][evs_event # hs_hal_svc] start player: source=TONE_ID(0)", "complete_raw": "[2026-01-01 00:00:03.000][D][player_0_td # PA_MGR] Refresh PA to OFF, timeout 30000, by \"tone_player_end\""}
+normalized: {"play_start_offset_s": 3.128, "play_end_offset_s": 4.463, "next_gap_s": null}
+handling: stop_round
+evidence: -
+message: 第 2 次播报唤醒且响应播放完成
+details: -
+
+time: 2026-11-12 17:05:34.693
+level: INFO
+event: RECORDING
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 7
+case_id: wake-0007
+phase: record_open
+source: -
+device: 麦克风 (UAC Audio)
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: 30301
+rule_id: -
+expected: {"channels": 8, "rate": 16000, "format": "pcm_s16le", "one_pcm_per_round": true}
+actual: {"file": "R00007_20261112-170527.pcm", "bytes": 1212416, "sec": 4.736, "sha256": "6249c24e8212a37c6568a3ed2a9be2f73bd12b90d48a027e14fb4643415fc1e0", "open_attempts": 16, "recording_start_offset_s": 2.388}
+raw: -
+normalized: -
+handling: -
+evidence: ["recoder/R00007_20261112-170527.pcm"]
+message: 本轮唯一 PCM 已开启并结束
+details: -
+
+time: 2026-11-12 17:05:34.703
+level: INFO
+event: ROUND_RESULT
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 7
+case_id: wake-0007
+phase: round_end
+source: -
+device: USB\VID_CAFE&PID_0010
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: all_checks_pass
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"required_checks": "all true", "result": "PASS"}
+actual: {"result": "PASS", "attempts_total": 2, "first_success_attempt": 2, "first_play_start_offset_s": 0.0, "recording_start_offset_s": 2.388, "first_wakeup_offset_s": 4.269}
+raw: {"checks": {"pdu_rc_0": true, "pdu_off_hold_ge_18s": true, "boot_seen": true, "record_opened": true, "record_format_8ch_16k_16bit": true, "first_play_immediate_le_0.5s": true, "wav_trimmed_used": true, "attempts_le_10": true, "response_complete_when_success": true, "post_record_2s_when_success": true, "serial_read_errors_zero": true}, "no_wakeup_attempts": [1]}
+normalized: {"cumulative": {"pass": 7, "fail": 0, "blocked": 0, "success_rate": 100.0, "no_wakeup_total": 7, "attempts_total": 14}}
+handling: -
+evidence: ["serial_logs/serial_COM4_csk.log#001806", "recoder/R00007_20261112-170527.pcm", "results.csv#round-7"]
+message: R7 PASS（attempts=2, first_play=0.000s）
+details: -
+
+time: 2026-11-12 17:05:58.973
+level: INFO
+event: PDU_CYCLE
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 8
+case_id: wake-0008
+phase: power_cycle
+source: pduControl.exe
+device: USB\VID_CAFE&PID_0010
+port_role: -
+action_id: pdu-reboot-0008
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: pdu_returncode_0
+attempt: -
+max_attempts: -
+elapsed_ms: 24270
+rule_id: -
+expected: {"ip": "192.0.2.10", "socket": 1, "off_sec": 20}
+actual: {"rc": 0, "elapsed_ms": 24270, "power_on_at": "2026-11-12 17:05:58.973"}
+raw: {"stdout_stderr": "开始给设备上硬重启，间隔20s\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查断电状态，当前状态为2\r\n第1个插座，断电成功！\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查上电状态，当前状态为1\r\n第1个插座， ！\r\n设备硬重启完成\r\n"}
+normalized: -
+handling: -
+evidence: ["tool.log"]
+message: PDU 断电 20s 后上电，t=0.00s 基准 2026-11-12 17:05:58.973
+details: -
+
+time: 2026-11-12 17:06:02.110
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 8
+case_id: wake-0008
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0008-A01
+broadcast_id: R0008-A01
+correlation_id: -
+status: NO_WAKE
+reason: -
+attempt: 1
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake_raw_any": ["send asr event: WAKEUP", "\"bMain\":1"]}
+actual: {"wake_seen": false, "start_seen": false}
+raw: {"play_start": "2026-11-12 17:05:58.973", "play_end": "2026-11-12 17:06:00.601"}
+normalized: {"play_start_offset_s": 0.0, "play_end_offset_s": 1.628, "next_gap_s": 1.5, "wake_check_window_s": 1.5}
+handling: continue
+evidence: -
+message: 第 1 次播报未唤醒
+details: -
+
+time: 2026-11-12 17:06:04.111
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 8
+case_id: wake-0008
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0008-A02
+broadcast_id: R0008-A02
+correlation_id: -
+status: PASS
+reason: -
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake": true, "response_complete": true}
+actual: {"wake": true, "response_start_offset_s": 4.568, "response_complete_offset_s": 5.117}
+raw: {"wake_raw": ["[2026-01-01 00:00:03.008][D][evs_event # algo] Pre Wakeup: {\"rlt\":[{\"istart\":39,\"iresid\":1,\"iduration\":14,\"nfillerscore\":442,\"nkeywordscore\":12675,\"ncm\":810,\"ncmThreshold\":800,\"keyword\":\"da2 kai1 kong1 tiao2\",\"intent\":\"da2 kai1 kong1 tiao2\",\"bMain\":1,\"bAbsorb\":0,\"bMhx\":0}]}"], "start_raw": "[2026-01-01 00:00:03.215][I][evs_event # hs_hal_svc] start player: source=TONE_ID(0)", "complete_raw": "[2026-01-01 00:00:03.822][D][player_0_td # PA_MGR] Refresh PA to OFF, timeout 30000, by \"tone_player_end\""}
+normalized: {"play_start_offset_s": 3.137, "play_end_offset_s": 4.468, "next_gap_s": null}
+handling: stop_round
+evidence: -
+message: 第 2 次播报唤醒且响应播放完成
+details: -
+
+time: 2026-11-12 17:06:06.191
+level: INFO
+event: RECORDING
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 8
+case_id: wake-0008
+phase: record_open
+source: -
+device: 麦克风 (UAC Audio)
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: 31488
+rule_id: -
+expected: {"channels": 8, "rate": 16000, "format": "pcm_s16le", "one_pcm_per_round": true}
+actual: {"file": "R00008_20261112-170558.pcm", "bytes": 1425408, "sec": 5.568, "sha256": "3f8f6a9b5fae96f0fe3ea55e914dff45c3885c1e69a8a90958e1b3fba2373e85", "open_attempts": 11, "recording_start_offset_s": 1.613}
+raw: -
+normalized: -
+handling: -
+evidence: ["recoder/R00008_20261112-170558.pcm"]
+message: 本轮唯一 PCM 已开启并结束
+details: -
+
+time: 2026-11-12 17:06:06.212
+level: INFO
+event: ROUND_RESULT
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 8
+case_id: wake-0008
+phase: round_end
+source: -
+device: USB\VID_CAFE&PID_0010
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: all_checks_pass
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"required_checks": "all true", "result": "PASS"}
+actual: {"result": "PASS", "attempts_total": 2, "first_success_attempt": 2, "first_play_start_offset_s": 0.0, "recording_start_offset_s": 1.613, "first_wakeup_offset_s": 4.298}
+raw: {"checks": {"pdu_rc_0": true, "pdu_off_hold_ge_18s": true, "boot_seen": true, "record_opened": true, "record_format_8ch_16k_16bit": true, "first_play_immediate_le_0.5s": true, "wav_trimmed_used": true, "attempts_le_10": true, "response_complete_when_success": true, "post_record_2s_when_success": true, "serial_read_errors_zero": true}, "no_wakeup_attempts": [1]}
+normalized: {"cumulative": {"pass": 8, "fail": 0, "blocked": 0, "success_rate": 100.0, "no_wakeup_total": 8, "attempts_total": 16}}
+handling: -
+evidence: ["serial_logs/serial_COM4_csk.log#002102", "recoder/R00008_20261112-170558.pcm", "results.csv#round-8"]
+message: R8 PASS（attempts=2, first_play=0.000s）
+details: -
+
+time: 2026-11-12 17:06:30.461
+level: INFO
+event: PDU_CYCLE
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 9
+case_id: wake-0009
+phase: power_cycle
+source: pduControl.exe
+device: USB\VID_CAFE&PID_0010
+port_role: -
+action_id: pdu-reboot-0009
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: pdu_returncode_0
+attempt: -
+max_attempts: -
+elapsed_ms: 24249
+rule_id: -
+expected: {"ip": "192.0.2.10", "socket": 1, "off_sec": 20}
+actual: {"rc": 0, "elapsed_ms": 24249, "power_on_at": "2026-11-12 17:06:30.461"}
+raw: {"stdout_stderr": "开始给设备上硬重启，间隔20s\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查断电状态，当前状态为2\r\n第1个插座，断电成功！\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查上电状态，当前状态为1\r\n第1个插座， ！\r\n设备硬重启完成\r\n"}
+normalized: -
+handling: -
+evidence: ["tool.log"]
+message: PDU 断电 20s 后上电，t=0.00s 基准 2026-11-12 17:06:30.461
+details: -
+
+time: 2026-11-12 17:06:33.619
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 9
+case_id: wake-0009
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0009-A01
+broadcast_id: R0009-A01
+correlation_id: -
+status: NO_WAKE
+reason: -
+attempt: 1
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake_raw_any": ["send asr event: WAKEUP", "\"bMain\":1"]}
+actual: {"wake_seen": false, "start_seen": false}
+raw: {"play_start": "2026-11-12 17:06:30.461", "play_end": "2026-11-12 17:06:32.112"}
+normalized: {"play_start_offset_s": 0.0, "play_end_offset_s": 1.651, "next_gap_s": 1.5, "wake_check_window_s": 1.5}
+handling: continue
+evidence: -
+message: 第 1 次播报未唤醒
+details: -
+
+time: 2026-11-12 17:06:35.593
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 9
+case_id: wake-0009
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0009-A02
+broadcast_id: R0009-A02
+correlation_id: -
+status: PASS
+reason: -
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake": true, "response_complete": true}
+actual: {"wake": true, "response_start_offset_s": 4.582, "response_complete_offset_s": 5.122}
+raw: {"wake_raw": ["[2026-01-01 00:00:03.008][D][evs_event # algo] Pre Wakeup: {\"rlt\":[{\"istart\":33,\"iresid\":1,\"iduration\":16,\"nfillerscore\":826,\"nkeywordscore\":14346,\"ncm\":916,\"ncmThreshold\":800,\"keyword\":\"da2 kai1 kong1 tiao2\",\"intent\":\"da2 kai1 kong1 tiao2\",\"bMain\":1,\"bAbsorb\":0,\"bMhx\":0}]}"], "start_raw": "[2026-01-01 00:00:03.245][I][evs_event # hs_hal_svc] start player: source=TONE_ID(0)", "complete_raw": "[2026-01-01 00:00:03.849][D][player_0_td # PA_MGR] Refresh PA to OFF, timeout 30000, by \"tone_player_end\""}
+normalized: {"play_start_offset_s": 3.158, "play_end_offset_s": 4.493, "next_gap_s": null}
+handling: stop_round
+evidence: -
+message: 第 2 次播报唤醒且响应播放完成
+details: -
+
+time: 2026-11-12 17:06:37.628
+level: INFO
+event: RECORDING
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 9
+case_id: wake-0009
+phase: record_open
+source: -
+device: 麦克风 (UAC Audio)
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: 31415
+rule_id: -
+expected: {"channels": 8, "rate": 16000, "format": "pcm_s16le", "one_pcm_per_round": true}
+actual: {"file": "R00009_20261112-170630.pcm", "bytes": 1376256, "sec": 5.376, "sha256": "1e0fe962055dbb95b5e97129fb94f572bee97c59f19831056e3f907ba7f2795e", "open_attempts": 12, "recording_start_offset_s": 1.752}
+raw: -
+normalized: -
+handling: -
+evidence: ["recoder/R00009_20261112-170630.pcm"]
+message: 本轮唯一 PCM 已开启并结束
+details: -
+
+time: 2026-11-12 17:06:37.638
+level: INFO
+event: ROUND_RESULT
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 9
+case_id: wake-0009
+phase: round_end
+source: -
+device: USB\VID_CAFE&PID_0010
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: all_checks_pass
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"required_checks": "all true", "result": "PASS"}
+actual: {"result": "PASS", "attempts_total": 2, "first_success_attempt": 2, "first_play_start_offset_s": 0.0, "recording_start_offset_s": 1.752, "first_wakeup_offset_s": 4.285}
+raw: {"checks": {"pdu_rc_0": true, "pdu_off_hold_ge_18s": true, "boot_seen": true, "record_opened": true, "record_format_8ch_16k_16bit": true, "first_play_immediate_le_0.5s": true, "wav_trimmed_used": true, "attempts_le_10": true, "response_complete_when_success": true, "post_record_2s_when_success": true, "serial_read_errors_zero": true}, "no_wakeup_attempts": [1]}
+normalized: {"cumulative": {"pass": 9, "fail": 0, "blocked": 0, "success_rate": 100.0, "no_wakeup_total": 9, "attempts_total": 18}}
+handling: -
+evidence: ["serial_logs/serial_COM4_csk.log#002403", "recoder/R00009_20261112-170630.pcm", "results.csv#round-9"]
+message: R9 PASS（attempts=2, first_play=0.000s）
+details: -
+
+time: 2026-11-12 17:07:01.875
+level: INFO
+event: PDU_CYCLE
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 10
+case_id: wake-0010
+phase: power_cycle
+source: pduControl.exe
+device: USB\VID_CAFE&PID_0010
+port_role: -
+action_id: pdu-reboot-0010
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: pdu_returncode_0
+attempt: -
+max_attempts: -
+elapsed_ms: 24237
+rule_id: -
+expected: {"ip": "192.0.2.10", "socket": 1, "off_sec": 20}
+actual: {"rc": 0, "elapsed_ms": 24237, "power_on_at": "2026-11-12 17:07:01.875"}
+raw: {"stdout_stderr": "开始给设备上硬重启，间隔20s\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查断电状态，当前状态为2\r\n第1个插座，断电成功！\r\n<Response [200]>\r\n服务器正常\r\n第1个插座，正在检查上电状态，当前状态为1\r\n第1个插座， ！\r\n设备硬重启完成\r\n"}
+normalized: -
+handling: -
+evidence: ["tool.log"]
+message: PDU 断电 20s 后上电，t=0.00s 基准 2026-11-12 17:07:01.875
+details: -
+
+time: 2026-11-12 17:07:05.009
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 10
+case_id: wake-0010
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0010-A01
+broadcast_id: R0010-A01
+correlation_id: -
+status: NO_WAKE
+reason: -
+attempt: 1
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake_raw_any": ["send asr event: WAKEUP", "\"bMain\":1"]}
+actual: {"wake_seen": false, "start_seen": false}
+raw: {"play_start": "2026-11-12 17:07:01.875", "play_end": "2026-11-12 17:07:03.505"}
+normalized: {"play_start_offset_s": 0.0, "play_end_offset_s": 1.63, "next_gap_s": 1.5, "wake_check_window_s": 1.5}
+handling: continue
+evidence: -
+message: 第 1 次播报未唤醒
+details: -
+
+time: 2026-11-12 17:07:06.940
+level: INFO
+event: BROADCAST
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 10
+case_id: wake-0010
+phase: wake_wait
+source: -
+device: -
+port_role: -
+action_id: play-R0010-A02
+broadcast_id: R0010-A02
+correlation_id: -
+status: PASS
+reason: -
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"wake": true, "response_complete": true}
+actual: {"wake": true, "response_start_offset_s": 4.505, "response_complete_offset_s": 5.045}
+raw: {"wake_raw": ["[2026-01-01 00:00:03.008][D][evs_event # algo] Pre Wakeup: {\"rlt\":[{\"istart\":37,\"iresid\":1,\"iduration\":18,\"nfillerscore\":504,\"nkeywordscore\":13317,\"ncm\":877,\"ncmThreshold\":800,\"keyword\":\"da2 kai1 kong1 tiao2\",\"intent\":\"da2 kai1 kong1 tiao2\",\"bMain\":1,\"bAbsorb\":0,\"bMhx\":0}]}"], "start_raw": "[2026-01-01 00:00:03.208][I][evs_event # hs_hal_svc] start player: source=TONE_ID(0)", "complete_raw": "[2026-01-01 00:00:03.811][D][player_0_td # PA_MGR] Refresh PA to OFF, timeout 30000, by \"tone_player_end\""}
+normalized: {"play_start_offset_s": 3.134, "play_end_offset_s": 4.435, "next_gap_s": null}
+handling: stop_round
+evidence: -
+message: 第 2 次播报唤醒且响应播放完成
+details: -
+
+time: 2026-11-12 17:07:09.004
+level: INFO
+event: RECORDING
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 10
+case_id: wake-0010
+phase: record_open
+source: -
+device: 麦克风 (UAC Audio)
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: 31365
+rule_id: -
+expected: {"channels": 8, "rate": 16000, "format": "pcm_s16le", "one_pcm_per_round": true}
+actual: {"file": "R00010_20261112-170701.pcm", "bytes": 1441792, "sec": 5.632, "sha256": "f91cee528e58c2a0939a62a8eafec76e06ed5351c3ec42ffeea56999cdf62790", "open_attempts": 10, "recording_start_offset_s": 1.443}
+raw: -
+normalized: -
+handling: -
+evidence: ["recoder/R00010_20261112-170701.pcm"]
+message: 本轮唯一 PCM 已开启并结束
+details: -
+
+time: 2026-11-12 17:07:09.016
+level: INFO
+event: ROUND_RESULT
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 10
+case_id: wake-0010
+phase: round_end
+source: -
+device: USB\VID_CAFE&PID_0010
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: all_checks_pass
+attempt: 2
+max_attempts: 10
+elapsed_ms: -
+rule_id: -
+expected: {"required_checks": "all true", "result": "PASS"}
+actual: {"result": "PASS", "attempts_total": 2, "first_success_attempt": 2, "first_play_start_offset_s": 0.0, "recording_start_offset_s": 1.443, "first_wakeup_offset_s": 4.235}
+raw: {"checks": {"pdu_rc_0": true, "pdu_off_hold_ge_18s": true, "boot_seen": true, "record_opened": true, "record_format_8ch_16k_16bit": true, "first_play_immediate_le_0.5s": true, "wav_trimmed_used": true, "attempts_le_10": true, "response_complete_when_success": true, "post_record_2s_when_success": true, "serial_read_errors_zero": true}, "no_wakeup_attempts": [1]}
+normalized: {"cumulative": {"pass": 10, "fail": 0, "blocked": 0, "success_rate": 100.0, "no_wakeup_total": 10, "attempts_total": 20}}
+handling: -
+evidence: ["serial_logs/serial_COM4_csk.log#002704", "recoder/R00010_20261112-170701.pcm", "results.csv#round-10"]
+message: R10 PASS（attempts=2, first_play=0.000s）
+details: -
+
+time: 2026-11-12 17:07:09.019
+level: INFO
+event: MILESTONE
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 10
+case_id: -
+phase: milestone
+source: -
+device: -
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: -
+rule_id: -
+expected: -
+actual: {"completed_rounds": 10, "target_rounds": 10, "aggregate": {"completed_rounds": 10, "pass": 10, "fail": 0, "blocked": 0, "success_rate": 100.0, "attempts_total": 20, "no_wakeup_total": 10, "avg_attempts": 2.0, "first_success_distribution": {"counts": {"1": 0, "2": 10, "3": 0, "4": 0, "5": 0, "6": 0, "7": 0, "8": 0, "9": 0, "10": 0, "null": 0}, "percent": {"1": 0.0, "2": 100.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0, "7": 0.0, "8": 0.0, "9": 0.0, "10": 0.0, "null": 0.0}, "completed_rounds": 10, "max_count_keys": ["2"], "min_count_keys": ["1", "10", "3", "4", "5", "6", "7", "8", "9", "null"]}}, "counters": {"pdu_fail": 0, "rec_fail": 0, "com4_err": 0, "first_fail": null, "no_wakeup_total": 10, "attempts_total": 20}, "recent_10_elapsed_sec": 310.8, "avg_sec_per_round": 31.08, "eta_hours": 0.0, "free_gb": 110.64, "timestamp": "2026-11-12 17:07:09.016"}
+raw: -
+normalized: -
+handling: -
+evidence: ["D:\\tasks\\NOAH-67\\result\\device-x-protocol-v2-smoke10-20261112-170155\\milestones\\rounds_00010.json"]
+message: 里程碑 10 轮已写入
+details: -
+
+time: 2026-11-12 17:07:09.419
+level: INFO
+event: TASK_END
+task_id: device-x-protocol-v2-smoke10-20261112-170155
+epoch: -
+round: 10
+case_id: -
+phase: -
+source: -
+device: -
+port_role: -
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: completed
+attempt: -
+max_attempts: -
+elapsed_ms: -
+rule_id: -
+expected: {"target_rounds": 10}
+actual: {"completed_rounds": 10, "aggregate": {"completed_rounds": 10, "pass": 10, "fail": 0, "blocked": 0, "success_rate": 100.0, "attempts_total": 20, "no_wakeup_total": 10, "avg_attempts": 2.0, "first_success_distribution": {"counts": {"1": 0, "2": 10, "3": 0, "4": 0, "5": 0, "6": 0, "7": 0, "8": 0, "9": 0, "10": 0, "null": 0}, "percent": {"1": 0.0, "2": 100.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0, "7": 0.0, "8": 0.0, "9": 0.0, "10": 0.0, "null": 0.0}, "completed_rounds": 10, "max_count_keys": ["2"], "min_count_keys": ["1", "10", "3", "4", "5", "6", "7", "8", "9", "null"]}}, "gate": {"smoke10_all_pass": true, "pdu_failures": 0, "rec_failures": 0, "com4_read_errors": 0, "no_pdu_rec_com4_failures": true, "first_play_immediate_all": true, "first_play_max_offset_s": 0.0, "required_checks_all_true": true, "trimmed_wav_used_sha_ok": true, "structured_artifacts_present": false, "gate_pass": false, "evaluated_at": "2026-11-12 17:07:09.372"}}
+raw: -
+normalized: -
+handling: -
+evidence: ["tool.log", "results.csv", "cases.csv", "serial_logs/serial_COM4_csk.log"]
+message: 任务结束：PASS
+details: -
+
