@@ -93,13 +93,16 @@ class GoldenLogTests(unittest.TestCase):
 
     def test_tool_log_contains_tool_and_device_categories(self) -> None:
         text = "\n".join(tool_lines(self.run_dir))
-        for category in ("[RUN]", "[ENV]", "[SERIAL]", "[PDU]", "[WAKE]", "[PLAYER]", "[REC]", "[RESULT]"):
+        for category in ("[RUN]", "[ENV]", "[SERIAL]", "[PDU]", "[WAKE]", "[REC]", "[RESULT]", "[DEVICE]"):
             self.assertIn(category, text)
-        self.assertEqual(text.count("[PDU][STATE]"), 20)          # 10 次断电 + 10 次上电
+        self.assertEqual(text.count("[DEVICE][POWER_OFF]"), 10)
+        self.assertEqual(text.count("[DEVICE][POWER_ON]"), 10)
+        self.assertEqual(text.count("[DEVICE][PRE_WAKEUP]"), 10)
+        self.assertEqual(text.count("[DEVICE][PLAYER_START]"), 10)
+        self.assertEqual(text.count("[DEVICE][PLAYER_COMPLETE]"), 10)
         self.assertIn("state=ON→OFF", text)
         self.assertIn("state=OFF→ON", text)
         self.assertEqual(text.count("[WAKE][NO_WAKE]"), 10)
-        self.assertEqual(text.count("[WAKE][STATE]"), 10)          # 预唤醒
         self.assertIn("device_ts=", text)
         self.assertIn("ncm=", text)
         self.assertIn("threshold=", text)
@@ -261,7 +264,7 @@ class ToolLogUnitTests(unittest.TestCase):
             eventlog.write_bundle(eventlog.read_events(run_dir / "events.jsonl"), run_dir)
             lines = tool_lines(run_dir)
         self.assertEqual(len(lines), 2)
-        self.assertIn("[DEVICE][STATE]", lines[0])
+        self.assertIn("[DEVICE][BOOT_STAGE]", lines[0])
         self.assertIn("repeat=3", lines[0])
         self.assertIn("last_hit=2026-11-12 10:00:02.000", lines[0])
         self.assertIn("就绪", lines[1])
@@ -274,7 +277,7 @@ class ToolLogUnitTests(unittest.TestCase):
         self.assertIn("未识别设备行", record.message)
         self.assertEqual(record.evidence, [{"path": "serial_logs/x.log", "line": 7}])
         rendered = eventlog.render_tool_log({"tooling": {}}, [record])
-        self.assertIn("[DEVICE][STATE]", rendered)
+        self.assertIn("[DEVICE][UNPARSED]", rendered)
         self.assertIn("未识别设备行", rendered)
         self.assertEqual(len(rendered.splitlines()), 1)
 
@@ -561,6 +564,77 @@ class RedactionTests(unittest.TestCase):
             for name, pattern in self.PATTERNS.items():
                 match = pattern.search(text)
                 self.assertIsNone(match, f"{path.name} 命中 {name}: {match.group(0) if match else ''}")
+
+
+class DeviceCoverageTests(unittest.TestCase):
+    """覆盖启动/串口/唤醒/识别/TTS/播放/录音/业务/异常恢复的设备状态渲染。"""
+
+    def _device(self, event_code: str, moment: str, state: str, message: str, **parameters) -> eventlog.EventRecord:
+        return eventlog.EventRecord(
+            event=event_code, time=moment, round=1, phase="coverage", source="device", message=message,
+            details={"device": True, "state": state, "parameters": parameters},
+        )
+
+    def test_all_device_categories_render_one_line_each(self) -> None:
+        records = [
+            eventlog.EventRecord(event="TASK_START", time="2026-11-12 10:00:00.000",
+                                 expected={"mode": "smoke"}),
+            self._device("BOOT_START", "2026-11-12 10:00:01.000", "OFF→BOOTING", "设备开始启动", firmware="fw1"),
+            self._device("READY", "2026-11-12 10:00:03.000", "BOOTING→READY", "语音算法就绪"),
+            self._device("SERIAL_UP", "2026-11-12 10:00:03.100", "DOWN→UP", "串口链路建立", port="COM4"),
+            self._device("WAKEUP", "2026-11-12 10:00:05.000", "IDLE→WAKE", "检测到主唤醒",
+                         keyword="kw", ncm="871", threshold="800"),
+            self._device("ASR_START", "2026-11-12 10:00:05.200", "WAKE→ASR", "开始离线识别", route="offline"),
+            self._device("ASR_RESULT", "2026-11-12 10:00:05.600", "ASR→DONE", "离线识别完成",
+                         text_sha="abc123", intent="open"),
+            self._device("TTS_START", "2026-11-12 10:00:06.000", "IDLE→TTS", "开始响应 TTS",
+                         mode="online", text_sha="def456"),
+            self._device("TTS_END", "2026-11-12 10:00:06.500", "TTS→DONE", "TTS 合成结束", elapsed="520ms"),
+            self._device("PLAYER_START", "2026-11-12 10:00:06.600", "IDLE→PLAYING", "响应播报开始", volume="70"),
+            self._device("PLAYER_COMPLETE", "2026-11-12 10:00:07.300", "PLAYING→COMPLETE", "响应播报结束"),
+            self._device("VAD_START", "2026-11-12 10:00:07.400", "SILENCE→VOICE", "检测到人声"),
+            self._device("VAD_END", "2026-11-12 10:00:08.000", "VOICE→SILENCE", "人声结束"),
+            self._device("INTENT", "2026-11-12 10:00:08.100", "ASR→INTENT", "设备收到命令", command="switch1"),
+            self._device("ERROR", "2026-11-12 10:00:09.000", "READY→FAULT", "设备上报错误", code="E42"),
+            self._device("RECOVERED", "2026-11-12 10:00:10.000", "FAULT→READY", "设备恢复就绪"),
+            eventlog.device_unparsed_event("unknown native line", host_time="2026-11-12 10:00:11.000"),
+            eventlog.EventRecord(event="TASK_END", time="2026-11-12 10:00:12.000", status="PASS",
+                                 actual={"gate": {"gate_pass": True, "checks": {}}}),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            eventlog.write_event_records(records, run_dir / "events.jsonl")
+            summary = eventlog.write_bundle(eventlog.read_events(run_dir / "events.jsonl"), run_dir)
+            lines = tool_lines(run_dir)
+            findings = eventlog.verify_bundle(run_dir)
+        self.assertEqual(len(lines), len(records))
+        text = "\n".join(lines)
+        for code in (
+            "BOOT_START", "READY", "SERIAL_UP", "WAKEUP", "ASR_START", "ASR_RESULT",
+            "TTS_START", "TTS_END", "PLAYER_START", "PLAYER_COMPLETE", "VAD_START",
+            "VAD_END", "INTENT", "ERROR", "RECOVERED", "UNPARSED",
+        ):
+            self.assertIn(f"[DEVICE][{code}]", text, code)
+        for line in lines:
+            self.assertRegex(line, LINE_RE)
+            self.assertNotIn("\n", line)
+        self.assertIn("state=FAULT→READY", text)
+        self.assertIn("text_sha=abc123", text)
+        self.assertEqual(summary["final_status"], "NEEDS_REVIEW")  # 无 ROUND_RESULT
+        self.assertEqual([item for item in findings if item["level"] == "ERROR"], [])
+
+    def test_coverage_lines_are_sorted_by_host_time(self) -> None:
+        records = [
+            self._device("READY", "2026-11-12 10:00:05.000", "BOOTING→READY", "就绪"),
+            self._device("BOOT_START", "2026-11-12 10:00:01.000", "OFF→BOOTING", "启动"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            eventlog.write_event_records(records, run_dir / "events.jsonl")
+            eventlog.write_bundle(eventlog.read_events(run_dir / "events.jsonl"), run_dir)
+            lines = tool_lines(run_dir)
+        self.assertIn("[DEVICE][BOOT_START]", lines[0])
+        self.assertIn("[DEVICE][READY]", lines[1])
 
 
 class CliTests(unittest.TestCase):

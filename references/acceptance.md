@@ -17,7 +17,7 @@
 12. `raw` 全部外置到 `raw/e<seq>_<EVENT>.json`，事件只保留 `path`/`sha256`/`bytes`；`evidence` 为相对路径 + 行号 + 可选 sha256，产物中无绝对路径。
 13. `tool.log` 是完整动作审计：TOOL 动作与 DEVICE 状态合并，按 host 毫秒升序，**每个事件恰好一行**；无续行、无空行、无段落汇总，message 换行已转义。
 14. 每行自足：范围/动作/阶段/结果、做法与关键参数、前后状态、判断依据（expected/actual/hit/rule/阈值/next）、证据定位；不存在的字段不输出，不使用 `-` 占位。
-15. 设备状态必须出现在 `tool.log`：电源/BOOT/READY、串口、唤醒（含关键词/分数/阈值）、识别、TTS、播放、录音/VAD、异常恢复；连续重复状态合并并记 `repeat`/`last_hit`，未识别行记 `DEVICE_UNPARSED`（含 raw hash 与证据）。
+15. 设备状态必须出现在 `tool.log`，统一为 `[范围][DEVICE][状态码]`（如 `[R01][DEVICE][POWER_OFF]`、`[R01/A02][DEVICE][WAKEUP]`、`[R01/A02][DEVICE][ASR_RESULT]`）：电源/BOOT/READY、串口、唤醒（含关键词/分数/阈值）、识别、TTS、播放、录音/VAD、异常恢复；连续重复状态合并并记 `repeat`/`last_hit`，未识别行记 `DEVICE_UNPARSED`（含 raw hash 与证据）。
 16. `TASK_END` 行同时给出 `recorded`、`test_outcome`、`delivery`、`final`、`gate`、`rounds`；`gate_pass=false` 时 `final_status` 不为 `PASS`，状态冲突写入 `conflicts[]`；无 gate 判 `NEEDS_REVIEW`。
 17. `NO_WAKE` 记为一次 attempt 结果（不是工具 ERROR），计入首轮成功率与尝试分布；缺 `TASK_END` 按中断判 `NEEDS_REVIEW`。
 18. 旧 29 字段平铺日志可被 `eventlog build` 迁移：容错 CRLF/BOM/缺空行/多行 JSON/`-`/缺字段/中文/Windows 路径/超大 raw；`--markers` 派生 DEVICE 事件；迁移不修改源文件。

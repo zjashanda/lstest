@@ -1466,6 +1466,8 @@ def _audit_scope(record: EventRecord) -> str:
 
 
 def _audit_category(record: EventRecord) -> str:
+    if isinstance(record.details, Mapping) and record.details.get("device"):
+        return "DEVICE"
     if isinstance(record.details, Mapping) and record.details.get("audit_category"):
         return str(record.details["audit_category"]).upper()
     event = record.event.upper()
@@ -1476,6 +1478,10 @@ def _audit_category(record: EventRecord) -> str:
 
 
 def _audit_kind(record: EventRecord) -> str:
+    if isinstance(record.details, Mapping) and record.details.get("device"):
+        # 设备事件第三段就是设备状态码（BOOT_START/READY/WAKEUP/ASR_RESULT/TTS_END…）。
+        code = record.event.upper().removeprefix("DEVICE_") or "UNPARSED"
+        return code
     if isinstance(record.details, Mapping) and record.details.get("audit_kind"):
         return str(record.details["audit_kind"]).upper()
     event = record.event
@@ -1773,8 +1779,13 @@ def validate_tool_log_text(text: str) -> list[str]:
         if not match:
             errors.append(f"第 {number} 行不是单行时序格式（需 ms 时间戳 + [范围][动作][阶段]）")
             continue
-        if match.group("kind") not in TOOL_LOG_KINDS:
-            errors.append(f"第 {number} 行使用未注册阶段标签 {match.group('kind')}")
+        kind = match.group("kind")
+        is_device = match.group("category") == "DEVICE"
+        if is_device:
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]*", kind):
+                errors.append(f"第 {number} 行设备状态码不合法: {kind}")
+        elif kind not in TOOL_LOG_KINDS:
+            errors.append(f"第 {number} 行使用未注册阶段标签 {kind}")
     return errors
 
 

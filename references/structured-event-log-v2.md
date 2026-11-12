@@ -132,7 +132,8 @@ result/<timestamp>_<task>/
 ```
 
 - `范围`：`TASK` 或 `R01`、`R01/A02`。
-- `动作`：`RUN`/`ENV`/`SERIAL`/`PDU`/`WAKE`/`REC`/`PLAYER`/`TTS`/`ASR`/`NET`/`DEVICE`/`RESULT`。
+- `动作`：TOOL 事件用 `RUN`/`ENV`/`SERIAL`/`PDU`/`WAKE`/`REC`/`PLAYER`/`TTS`/`ASR`/`NET`/`RESULT`；
+  **DEVICE 事件固定用 `DEVICE`，第三段写设备状态码**（`BOOT_START`/`READY`/`WAKEUP`/`ASR_RESULT`/`TTS_END`/`PLAYER_START`/`VAD_END`…）。
 - `阶段/结果`：`START`/`END`/`STATE`/`JUDGE`/`RETRY`/`TIMEOUT`/`PASS`/`FAIL`/`NO_WAKE`/`BLOCKED`。
 - 第四段 `<结果>` 只在 `JUDGE`/`END` 等需要区分判断时出现，例如 `[R01/A01][WAKE][NO_WAKE]`、
   `[TASK][RUN][END][NEEDS_REVIEW]`。
@@ -140,10 +141,10 @@ result/<timestamp>_<task>/
 真实样例（脱敏后）：
 
 ```text
-2026-11-12 17:02:02.527 [R01][PDU][STATE] PDU 断电成功 | phase=power_cycle | case=wake-0001 | corr=R1:wake-0001:pdu-reboot-0001 | state=ON→OFF | evidence=tool.log
+2026-11-12 17:02:02.527 [R01][DEVICE][POWER_OFF] PDU 断电成功 | phase=power_cycle | case=wake-0001 | corr=R1:wake-0001:pdu-reboot-0001 | state=ON→OFF | evidence=tool.log
 2026-11-12 17:02:22.527 [R01][PDU][PASS] PDU 断电 20s 后上电… | tool=pduControl.exe | action=pdu-reboot-0001 | expected=ip=…, socket=1, off_sec=20 | actual=rc=0, elapsed_ms=24326, power_on=… | reason=pdu_returncode_0 | elapsed=24326ms | since_prev=20.000s | evidence=tool.log
 2026-11-12 17:02:25.183 [R01/A01][WAKE][NO_WAKE] 第 1 次播报未唤醒 | action=play-R0001-A01 | max_attempts=10 | play_s=0 | play_end_s=1.656 | gap_s=1 | window_s=1 | expected=wake_raw_any=… | actual=wake_seen=false, start_seen=false | hit=none | next=RETRY | evidence=raw/e0007_BROADCAST.json
-2026-11-12 17:02:26.484 [R01/A02][WAKE][STATE] 设备上报预唤醒 | ncm=871 | threshold=800 | keyword=… | bMain=1 | device_ts=2026-01-01 00:00:02.513 | state=IDLE→WAKE_DETECTED | evidence=…
+2026-11-12 17:02:26.484 [R01/A02][DEVICE][PRE_WAKEUP] 设备上报预唤醒 | ncm=871 | threshold=800 | keyword=… | bMain=1 | device_ts=2026-01-01 00:00:02.513 | state=IDLE→WAKE_DETECTED | evidence=…
 2026-11-12 17:07:09.419 [TASK][RUN][END][NEEDS_REVIEW] 任务结束 | recorded=PASS | test_outcome=PASS | delivery=DELIVERY_INCOMPLETE | final=NEEDS_REVIEW | gate=FAIL(structured_artifacts_present) | rounds=10/10 | reason=completed
 ```
 
