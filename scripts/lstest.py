@@ -156,6 +156,7 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--out-dir", type=Path, required=True, help="新的 v2 结果目录")
     build.add_argument("--task-id", default=None)
     build.add_argument("--meta", type=Path, default=None, help="任务上下文 JSON（title/purpose/scope/inputs 等）")
+    build.add_argument("--markers", type=Path, default=None, help="设备 marker 表 JSON；提供后从 raw 派生 DEVICE 状态事件")
     build.add_argument("--raw-min-bytes", type=int, default=0, help="raw 外置阈值；0 表示全部外置")
     render = eventlog_sub.add_parser("render", help="从已有 events.jsonl 重新生成 run.log / summary.md / summary.json")
     render.add_argument("--run-dir", type=Path, required=True)
@@ -214,6 +215,7 @@ def run_eventlog_command(args: argparse.Namespace) -> int:
         summary = eventlog.import_legacy_log(
             args.legacy, args.out_dir, task_id=args.task_id,
             raw_min_bytes=args.raw_min_bytes, meta=meta,
+            markers=getattr(args, "markers", None),
         )
     elif args.eventlog_command == "render":
         records = eventlog.read_events(args.run_dir / "events.jsonl")

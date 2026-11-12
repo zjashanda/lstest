@@ -584,9 +584,9 @@ class ToolLogValidator:
         actual = {item.name for item in root.iterdir()} if root.is_dir() else set()
         v2 = "events.jsonl" in actual
         if v2:
-            allowed = {"events.jsonl", "run.log", "summary.md", "summary.json", "raw",
-                       "tool.log", "results.csv", "cases.csv", "serial_logs", "STOP"}
-            required = {"events.jsonl", "run.log", "summary.md", "summary.json"}
+            allowed = {"events.jsonl", "tool.log", "tool.live.log", "summary.md", "summary.json", "raw",
+                       "results.csv", "cases.csv", "serial_logs", "STOP"}
+            required = {"events.jsonl", "tool.log", "summary.md", "summary.json"}
             unexpected = actual - allowed
             if unexpected:
                 errors.append("存在非标准运行产物: " + ", ".join(sorted(unexpected)))
@@ -594,14 +594,17 @@ class ToolLogValidator:
             if missing:
                 errors.append("缺少标准 v2 产物: " + ", ".join(sorted(missing)))
             try:
-                from .eventlog import verify_bundle
+                from .eventlog import validate_tool_log_text, verify_bundle
             except ImportError:  # pragma: no cover - 直接执行回退
-                from eventlog import verify_bundle
+                from eventlog import validate_tool_log_text, verify_bundle
             findings = verify_bundle(root)
             errors.extend(
                 f"{item['code']}: {item['message']}"
                 for item in findings if item["level"] == "ERROR"
             )
+            tool = root / "tool.log"
+            if tool.is_file():
+                errors.extend(validate_tool_log_text(tool.read_text(encoding="utf-8")))
         else:
             expected_files = {"tool.log", "results.csv", "cases.csv", "serial_logs"}
             unexpected = actual - expected_files - {"STOP"}

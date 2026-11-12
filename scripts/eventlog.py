@@ -4,7 +4,8 @@
 
 ``events.jsonl``  一行一个事件，固定 schema；``event_seq`` 递增，``raw`` 外置到
                  ``raw/``，只保留 path/sha256/bytes 引用。机器解析只读这个文件。
-``run.log``       由 events 确定性渲染的紧凑时间线，每个事件 1 行，异常展开 2-5 行。
+``tool.log``      完整动作审计：TOOL 与 DEVICE 状态按 host 毫秒排序，每个事件恰好一行，
+                 含做法/前后状态/判断依据/证据定位；不写续行、不写摘要。
 ``summary.md/json``由 events 确定性生成的结论：双成功率、尝试分布、趋势、异常、
                  首败、责任层、gate 与最终判定分离。
 
@@ -138,7 +139,7 @@ def sanitize_path(value: Any) -> str | None:
     """把绝对路径收敛成可公开的相对路径或文件名。
 
     规则固定且可复核：命中 ``result/`` 时保留其结果目录之后的相对路径；否则只保留
-    文件名。旧日志里的绝对路径不会进入 events.jsonl、run.log 或 summary。
+    文件名。旧日志里的绝对路径不会进入 events.jsonl、tool.log 或 summary。
     """
     if _skip(value):
         return None
@@ -260,6 +261,8 @@ class EventRecord:
     details: Any = None
     raw_ref: Any = None
     legacy_warnings: list[str] | None = None
+    #: 迁移/派生阶段的原始 raw 内容；不写入 events.jsonl，只用于提取设备事件。
+    raw_payload: Any = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -310,9 +313,7 @@ def record_from_mapping(payload: Mapping[str, Any], *, seq: int | None = None) -
     """
     warnings: list[str] = []
     values = dict(payload)
-    inline_raw = values.pop("raw", None)
-    if inline_raw is not None and not _skip(inline_raw):
-        warnings.append("raw 必须由 EventLogWriter 外置到 raw/，事件内不内嵌 raw")
+    raw_payload = values.pop("raw", None)
     known = set(EVENT_FIELDS) | {"schema", "legacy_fields"}
     unknown = {key: values.pop(key) for key in list(values) if key not in known and not _skip(values.get(key))}
 
@@ -337,7 +338,7 @@ def record_from_mapping(payload: Mapping[str, Any], *, seq: int | None = None) -
 
     record = EventRecord(
         event=str(values.get("event") or "UNKNOWN").upper(),
-        time=str(values["time"]) if not _skip(values.get("time")) else None,
+        time=ensure_ms(values.get("time")),
         level=str(values.get("level") or "INFO").upper(),
         task_id=None if _skip(values.get("task_id")) else str(values.get("task_id")),
         event_seq=int(seq if seq is not None else (_num(values.get("event_seq")) or 0) or 0) or None,
@@ -365,6 +366,7 @@ def record_from_mapping(payload: Mapping[str, Any], *, seq: int | None = None) -
         details=None if details is None else details,
         raw_ref=values.get("raw_ref") if isinstance(values.get("raw_ref"), Mapping) else None,
         legacy_warnings=warnings or None,
+        raw_payload=raw_payload,
     )
     if record.correlation_id is None:
         record.correlation_id = derive_correlation(record.round, record.case_id, record.broadcast_id or record.action_id)
@@ -475,7 +477,7 @@ class EventLogWriter:
     """v2 写入器：框架侧唯一写入口，适配器不得自行拼 JSONL。
 
     ``run_dir`` 下生成 ``events.jsonl`` 与 ``raw/``；``finalize()`` 再生成
-    ``run.log``、``summary.md``、``summary.json``。写入即 flush+fsync，
+    ``tool.log``、``summary.md``、``summary.json``。写入即 flush+fsync，
     标准证据（含崩溃中断）不会因为进程退出而丢失。
     """
 
@@ -501,6 +503,7 @@ class EventLogWriter:
         payload.setdefault("time", now_human())
         payload["event"] = event
         record = record_from_mapping(payload, seq=self._seq)
+        record.raw_payload = raw
         if raw is not None and not _skip(raw):
             record.raw_ref = self._externalize_raw(record, raw)
         record.event_seq = self._seq
@@ -542,6 +545,20 @@ class EventLogWriter:
         return write_bundle(records, self.run_dir, meta=meta, events_path=self.events_path)
 
 
+def write_event_records(records: Sequence[EventRecord], path: Path) -> int:
+    """把内存中的事件写成 events.jsonl（按给定顺序重新编号）。
+
+    供迁移/测试/适配器离线构建使用；在线运行请用 :class:`EventLogWriter`。
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", encoding="utf-8", newline="\n") as handle:
+        for index, record in enumerate(records, start=1):
+            record.event_seq = index
+            handle.write(record.to_json() + "\n")
+    return len(records)
+
+
 def read_events(path: Path) -> list[EventRecord]:
     """读取 events.jsonl；空行忽略，坏行给出物理行号。"""
     records: list[EventRecord] = []
@@ -579,6 +596,16 @@ def _promote_raw_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     return promoted
 
 
+def _sort_records(records: Sequence[EventRecord]) -> list[EventRecord]:
+    """按 host 毫秒稳定排序；缺失时间排末尾，保持原相对顺序。"""
+    return [
+        record for _, record in sorted(
+            enumerate(records),
+            key=lambda pair: (ensure_ms(pair[1].time) or "9999-12-31 23:59:59.999", pair[0]),
+        )
+    ]
+
+
 def import_legacy_log(
     source: Path,
     out_dir: Path,
@@ -586,19 +613,41 @@ def import_legacy_log(
     task_id: str | None = None,
     raw_min_bytes: int = 0,
     meta: Mapping[str, Any] | None = None,
+    markers: Mapping[str, Any] | str | Path | None = None,
 ) -> dict[str, Any]:
-    """旧平铺块日志 → v2 三层产物；不改动源文件，不联网。"""
+    """旧平铺块日志 → v2 三层产物；不改动源文件，不联网。
+
+    ``markers`` 是项目提供的设备 marker 表（见 ``references/structured-event-log-v2.md``）；
+    提供后会把 raw 中的设备状态派生成独立 DEVICE 事件，与 TOOL 事件同一毫秒时序。
+    """
     source = Path(source)
     payloads, warnings = parse_legacy_file(source)
     out_dir = Path(out_dir)
-    writer = EventLogWriter(out_dir, task_id or _guess_task_id(payloads) or source.stem, raw_min_bytes=raw_min_bytes)
+    task = task_id or _guess_task_id(payloads) or source.stem
+    records: list[EventRecord] = []
+    for item in payloads:
+        prepared = _promote_raw_context(item)
+        records.append(record_from_mapping(prepared, seq=len(records) + 1))
+    marker_value = markers if markers is not None else (dict(meta or {}).get("device_markers"))
+    device_markers, ts_pattern = load_markers(marker_value)
+    round_power_on: dict[Any, str] = {}
+    for record in records:
+        actual = record.actual if isinstance(record.actual, Mapping) else {}
+        power_on = ensure_ms(actual.get("power_on_at"))
+        if power_on and record.round is not None:
+            round_power_on.setdefault(record.round, power_on)
+    device_events = derive_device_events(
+        records, device_markers, device_ts_pattern=ts_pattern, round_power_on=round_power_on,
+    )
+    records = _sort_records(records + device_events)
+    writer = EventLogWriter(out_dir, task)
     try:
-        for item in payloads:
-            prepared = _promote_raw_context(item)
-            writer.emit(
-                str(prepared.get("event") or "UNKNOWN"),
-                **{key: value for key, value in prepared.items() if key != "event"},
-            )
+        for record in records:
+            payload = record.to_dict()
+            payload.pop("schema", None)
+            payload["event"] = record.event
+            payload["raw"] = record.raw_payload
+            writer.emit(record.event, **{key: value for key, value in payload.items() if key != "event"})
     finally:
         writer.close()
     summary = writer.finalize(meta=_merge_meta(meta, source=source, import_warnings=warnings))
@@ -1316,12 +1365,699 @@ def public_summary(summary: Mapping[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 渲染
+# tool.log：完整动作审计（TOOL + DEVICE 单行时序）
 # ---------------------------------------------------------------------------
 
-def _clock(record: EventRecord) -> str:
-    time = record.time or ""
-    return time[11:] if len(time) >= 23 else (time or "--:--:--.---")
+TOOL_LOG_KINDS = {
+    "START", "END", "STATE", "JUDGE", "WAIT", "RETRY", "TIMEOUT", "PASS", "FAIL",
+    "BLOCKED", "NO_WAKE", "WARN", "ERROR", "SKIP", "CANCEL", "NEEDS_REVIEW",
+    "MILESTONE", "EVENT",
+}
+TOOL_LOG_LINE_RE = re.compile(
+    r"^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) "
+    r"\[(?P<scope>[^\]\n]+)\]\[(?P<category>[A-Z_]+)\]\[(?P<kind>[A-Z_]+)\]"
+    r"(?:\[(?P<result>[A-Z_]+)\])? (?P<body>.+)$"
+)
+CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+AUDIT_CATEGORY_RULES = (
+    ("ENV", ("DEVICE_BINDING", "TASK_CONFIG", "ENVIRONMENT")),
+    ("RESULT", ("ROUND_RESULT", "CASE_RESULT")),
+    ("RUN", ("TASK_", "MILESTONE")),
+    ("PDU", ("PDU_", "POWER_")),
+    ("WAKE", ("WAKE", "BROADCAST", "PRE_WAKEUP")),
+    ("REC", ("RECORD",)),
+    ("PLAYER", ("PLAYER_", "PLAY_", "HOST_AUDIO")),
+    ("SERIAL", ("SERIAL_",)),
+    ("TTS", ("TTS_",)),
+    ("ASR", ("ASR_", "RECOGNITION")),
+    ("NET", ("WIFI_", "CLOUD_", "ONLINE_", "PROTOCOL_", "HEARTBEAT")),
+    ("DEVICE", ("DEVICE_", "BOOT_", "READY", "REBOOT", "RESET_", "CRASH", "WATCHDOG")),
+)
+SCALAR_LIMIT = 120
+DEVICE_TS_RE = re.compile(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]")
+
+#: tool.log 的短字段名（只压缩框架自己的字段名，取值不变）。
+FACT_LABELS = {
+    "attempts_total": "attempts",
+    "first_success_attempt": "first_ok",
+    "first_play_start_offset_s": "play_s",
+    "recording_start_offset_s": "rec_start_s",
+    "first_wakeup_offset_s": "wake_s",
+    "play_start_offset_s": "play_s",
+    "play_end_offset_s": "play_end_s",
+    "response_start_offset_s": "resp_start_s",
+    "response_complete_offset_s": "resp_end_s",
+    "next_gap_s": "gap_s",
+    "wake_check_window_s": "window_s",
+    "power_on_at": "power_on",
+    "format": "fmt",
+    "channels": "ch",
+    "avg_sec_per_round": "avg_s_per_round",
+    "recent_10_elapsed_sec": "recent10_s",
+    "success_rate": "success_rate",
+}
+
+
+def ensure_ms(value: Any) -> str | None:
+    """任何日志时间统一成北京时间毫秒：`YYYY-MM-DD HH:MM:SS.mmm`。
+
+    接受已有毫秒、只到秒、`T` 分隔、尾部 `Z` 或时区偏移；不合法时原样返回（由 verify 报错）。
+    """
+    if _skip(value):
+        return None
+    text = str(value).strip().replace("T", " ")
+    match = re.match(
+        r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(?:Z|[+-]\d{2}:?\d{2})?$",
+        text,
+    )
+    if not match:
+        return text
+    fraction = (match.group(2) or "000")[:3].ljust(3, "0")
+    return f"{match.group(1)}.{fraction}"
+
+
+def one_line(value: Any) -> str:
+    """把任意文本压成物理一行：换行/控制字符转义，绝不产生续行。"""
+    if _skip(value):
+        return ""
+    text = str(value)
+    text = text.replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n")
+    text = CONTROL_CHARS.sub(" ", text)
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
+def _clip(value: Any, limit: int = SCALAR_LIMIT) -> str:
+    text = _text(value)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _short_hash(value: Any) -> str:
+    text = str(value or "")
+    return text if len(text) <= 16 else text[:16] + "…"
+
+
+def _audit_scope(record: EventRecord) -> str:
+    if record.event.startswith("TASK_") or record.round is None:
+        return "TASK"
+    scope = f"R{int(record.round):02d}"
+    if record.attempt is not None:
+        scope += f"/A{int(record.attempt):02d}"
+    return scope
+
+
+def _audit_category(record: EventRecord) -> str:
+    if isinstance(record.details, Mapping) and record.details.get("audit_category"):
+        return str(record.details["audit_category"]).upper()
+    event = record.event.upper()
+    for label, tokens in AUDIT_CATEGORY_RULES:
+        if any(token in event for token in tokens):
+            return label
+    return "DEVICE" if record.source in {"device", "DEVICE"} else "TOOL"
+
+
+def _audit_kind(record: EventRecord) -> str:
+    if isinstance(record.details, Mapping) and record.details.get("audit_kind"):
+        return str(record.details["audit_kind"]).upper()
+    event = record.event
+    if event in {"TASK_START", "TASK_STARTED"}:
+        return "START"
+    if event in {"TASK_END", "TASK_FINISHED"}:
+        return "END"
+    if event == "MILESTONE":
+        return "MILESTONE"
+    if event in {"ROUND_RESULT", "CASE_RESULT"}:
+        return "JUDGE"
+    status = (record.status or "").upper().replace("NO_WAKEUP", "NO_WAKE")
+    state_events = {"DEVICE_BINDING", "SERIAL_OPEN", "SERIAL_CLOSE", "POWER_OFF", "POWER_ON"}
+    if status:
+        if status in {"PASS", "OK", "OBSERVED"} and (
+            event in state_events or (not record.expected and not record.actual)
+        ):
+            return "STATE"
+        return status if status in TOOL_LOG_KINDS else "JUDGE"
+    if event.startswith(("SERIAL_", "PDU_", "POWER_", "PLAYER_", "RECORD", "BOOT_")):
+        return "STATE"
+    return "EVENT"
+
+
+def _compact(value: Any, limit: int = 200) -> str:
+    """把 expected/actual 压成单行 key=value；raw 不进入此函数。"""
+    if _skip(value):
+        return ""
+    if isinstance(value, Mapping):
+        parts: list[str] = []
+        for key, item in value.items():
+            label = FACT_LABELS.get(str(key), str(key))
+            if isinstance(item, Mapping):
+                nested = [
+                    f"{sub}={_clip(sub_item, 60)}"
+                    for sub, sub_item in item.items()
+                    if not isinstance(sub_item, (Mapping, list, tuple)) and not _skip(sub_item)
+                ]
+                parts.append(f"{label}=" + ("{" + ", ".join(nested) + "}" if nested else f"<{len(item)} keys>"))
+            elif isinstance(item, (list, tuple)):
+                if all(isinstance(entry, (str, int, float, bool)) for entry in item):
+                    parts.append(f"{label}=" + "|".join(_clip(entry, 60) for entry in item))
+                else:
+                    parts.append(f"{label}=<{len(item)} items>")
+            else:
+                rendered = _short_hash(item) if "sha256" in str(key) else _clip(item, 80)
+                parts.append(f"{label}={rendered}")
+        text = ", ".join(parts)
+    elif isinstance(value, (list, tuple)):
+        text = "|".join(_clip(entry, 60) for entry in value)
+    else:
+        text = _clip(value, limit)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _audit_hits(record: EventRecord) -> str:
+    actual = record.actual if isinstance(record.actual, Mapping) else {}
+    hits = [str(key) for key, value in actual.items() if value is True]
+    if hits:
+        return ",".join(hits)
+    if actual:
+        return "none"
+    return ""
+
+
+EVENT_MESSAGES = {
+    "TASK_START": "任务开始",
+    "TASK_STARTED": "任务开始",
+    "TASK_END": "任务结束",
+    "TASK_FINISHED": "任务结束",
+    "DEVICE_BINDING": "绑定设备与音频端点",
+    "MILESTONE": "里程碑",
+    "SERIAL_OPEN": "打开串口",
+    "SERIAL_CLOSE": "关闭串口",
+    "PDU_CYCLE": "PDU 断电上电",
+    "RECORDING": "本轮录音开启并结束",
+    "ROUND_RESULT": "本轮判定",
+    "CASE_RESULT": "用例判定",
+}
+
+
+def _audit_next(record: EventRecord) -> str:
+    handling = (record.handling or "").lower()
+    mapping = {
+        "continue": "RETRY",
+        "retry": "RETRY",
+        "stop_round": "NEXT_ROUND",
+        "stop_task": "STOP",
+        "abort": "STOP",
+        "blocked": "BLOCKED",
+    }
+    if handling in mapping:
+        return mapping[handling]
+    return handling.upper() if handling else ""
+
+
+def _audit_evidence(record: EventRecord) -> str:
+    refs = []
+    for ref in record.evidence or []:
+        path = ref.get("path") or ""
+        if not path:
+            continue
+        refs.append(f"{path}#{ref['line']}" if ref.get("line") is not None else path)
+    return ",".join(refs[:4])
+
+
+def _audit_facts(record: EventRecord, summary: Mapping[str, Any], *, since_prev: float | None) -> list[str]:
+    """按“做法/状态/判断/产物/证据”顺序组装单行事实，缺失项不输出。"""
+    facts: list[str] = []
+    seen: dict[str, str] = {}
+
+    def add(key: str, value: Any, limit: int = SCALAR_LIMIT) -> None:
+        if _skip(value) or key in seen:
+            return
+        text = _clip(value, limit)
+        if not text or text == "-":
+            return
+        seen[key] = text
+        facts.append(f"{key}={text}")
+
+    details = record.details if isinstance(record.details, Mapping) else {}
+    is_device = bool(details.get("device"))
+    if record.event in {"TASK_START", "TASK_STARTED"}:
+        # 任务开头一行说清“测什么/用什么/输入是什么”，不展开工具自定义的大对象。
+        expected_map = record.expected if isinstance(record.expected, Mapping) else {}
+        for key in ("runtime", "profile_id", "profile_version", "gap_policy", "mode", "target_rounds"):
+            add(key, details.get(key) if not _skip(details.get(key)) else expected_map.get(key), 60)
+        for path_key, sha_key in (
+            ("wake_wav", "wake_wav_sha256"), ("audio_file", "audio_sha256"), ("input", "input_sha256"),
+        ):
+            path = details.get(path_key)
+            if _skip(path):
+                continue
+            digest = details.get(sha_key) or ""
+            add("input", f"{sanitize_path(path)}#{_short_hash(digest)}" if digest else sanitize_path(path), 80)
+        spec = _compact(record.expected)
+        if spec:
+            add("spec", spec, 160)
+        return facts
+    if not is_device:
+        source = record.source or (summary.get("tooling") or {}).get("tool")
+        if source:
+            add("tool", source)
+    if record.phase:
+        add("phase", record.phase)
+    if record.case_id:
+        add("case", record.case_id)
+    if record.action_id:
+        add("action", record.action_id)
+    if record.broadcast_id and record.broadcast_id != record.action_id:
+        add("broadcast", record.broadcast_id)
+    if is_device and record.correlation_id:
+        add("corr", record.correlation_id, 60)
+
+    parameters = details.get("parameters")
+    if isinstance(parameters, Mapping):
+        for key, value in parameters.items():
+            add(str(key), value, 80)
+    internal = {
+        "device", "audit_category", "audit_kind", "marker", "repeat_count", "last_hit",
+        "source_event", "source_event_seq", "unparsed", "legacy_fields", "parameters",
+        "raw_excerpt", "raw_sha256", "environment", "lstest_ref_sha256", "audit_before",
+        "audit_after", "state",
+    }
+    for key, value in details.items():
+        if str(key) in internal or str(key).startswith("audit_"):
+            continue
+        if str(key).endswith(("_format", "_ref_sha256")):
+            continue
+        if isinstance(value, Mapping):
+            for sub, item in value.items():
+                if _skip(item) or isinstance(item, Mapping):
+                    continue
+                add(f"{key}.{sub}", item, 60)
+        elif str(key).endswith("_sha256") or str(key) == "sha256":
+            add(str(key), _short_hash(value), 24)
+        else:
+            add(str(key), value, 80)
+    if details.get("state"):
+        add("state", details["state"], 40)
+    retries = _num(details.get("open_attempts")) or _num(
+        record.actual.get("open_attempts") if isinstance(record.actual, Mapping) else None
+    )
+    if retries and retries > 1:
+        add("retries", int(retries) - 1)
+    repeat_count = _num(details.get("repeat_count"))
+    if repeat_count and repeat_count > 1:
+        add("repeat", repeat_count)
+        add("last_hit", details.get("last_hit"), 32)
+    for label in ("audit_before", "audit_after"):
+        if details.get(label):
+            add(label.replace("audit_", "state_"), details[label], 80)
+    if record.max_attempts is not None:
+        add("max_attempts", record.max_attempts)
+    if isinstance(record.normalized, Mapping):
+        for key, value in record.normalized.items():
+            if not isinstance(value, Mapping):
+                add(FACT_LABELS.get(str(key), str(key)), value, 40)
+
+    expected = _compact(record.expected)
+    actual = _compact(record.actual)
+    status_upper = str(record.status or "").upper()
+    if expected and expected == actual:
+        add("spec", expected, 240)
+    else:
+        if expected:
+            add("expected", expected, 240)
+        if actual:
+            add("actual", actual, 240)
+    judging = record.event in {"ROUND_RESULT", "CASE_RESULT", "BROADCAST"} or (
+        status_upper in {"FAIL", "BLOCKED", "NO_WAKE", "NEEDS_REVIEW"} and bool(expected or actual)
+    )
+    if judging:
+        hits = _audit_hits(record)
+        if hits:
+            add("hit", hits, 80)
+    if record.rule_id:
+        add("rule", record.rule_id, 60)
+    if record.reason:
+        add("reason", record.reason, 80)
+    kind = _audit_kind(record)
+    if status_upper and status_upper != kind and (
+        kind in {"JUDGE", "END"} or status_upper not in {"PASS", "OK", "OBSERVED"}
+    ):
+        add("result", record.status, 24)
+    next_step = _audit_next(record)
+    if next_step:
+        add("next", next_step)
+    if record.elapsed_ms is not None:
+        add("elapsed", f"{_text(record.elapsed_ms)}ms")
+    if since_prev is not None and since_prev >= 1.0:
+        add("since_prev", f"{since_prev:.3f}s")
+    evidence = _audit_evidence(record)
+    if evidence:
+        add("evidence", evidence, 160)
+    elif record.raw_ref and record.raw_ref.get("path"):
+        add("evidence", record.raw_ref["path"], 80)
+    return facts
+
+
+def _audit_line(record: EventRecord, summary: Mapping[str, Any], *, since_prev: float | None = None) -> str:
+    scope = _audit_scope(record)
+    category = _audit_category(record)
+    kind = _audit_kind(record)
+    status = (record.status or "").upper().replace("NO_WAKEUP", "NO_WAKE")
+    stamp = ensure_ms(record.time) or "1970-01-01 00:00:00.000"
+
+    if record.event in {"TASK_END", "TASK_FINISHED"}:
+        # 收尾行必须同时给出动作结果、测试结果、交付状态与最终判定，避免再次出现
+        # “记录 PASS 但 gate 未通过”的矛盾记录。
+        final = str(summary.get("final_status") or "UNKNOWN")
+        rates = summary.get("rates") or {}
+        counts = summary.get("counts") or {}
+        gate = summary.get("gate") or {}
+        gate_state = "UNKNOWN" if gate.get("gate_pass") is None else (
+            "PASS" if gate.get("gate_pass") else "FAIL(" + ",".join(gate.get("failed_checks") or []) + ")"
+        )
+        parts = [
+            "任务结束",
+            f"recorded={status or '-'}",
+            f"test_outcome={summary.get('test_outcome')}",
+            f"delivery={summary.get('delivery_status')}",
+            f"final={final}",
+            f"gate={gate_state}",
+            f"rounds={counts.get('rounds_total', 0)}/{rates.get('rounds_target') or '?'}",
+        ]
+        if record.reason:
+            parts.append(f"reason={record.reason}")
+        if record.elapsed_ms is not None:
+            parts.append(f"elapsed={_text(record.elapsed_ms)}ms")
+        evidence = _audit_evidence(record)
+        if evidence:
+            parts.append(f"evidence={evidence}")
+        return f"{stamp} [{scope}][{category}][END][{final}] " + " | ".join(parts)
+
+    tokens = f"[{scope}][{category}][{kind}]"
+    if status and status != kind and kind in {"JUDGE", "END", "EVENT"}:
+        tokens += f"[{status}]"
+    message = one_line(record.message) or EVENT_MESSAGES.get(record.event) or one_line(record.event)
+    facts = _audit_facts(record, summary, since_prev=since_prev)
+    body = message
+    if facts:
+        body += (" | " if body else "") + " | ".join(facts)
+    return f"{stamp} {tokens} {body}".rstrip()
+
+
+def validate_tool_log_text(text: str) -> list[str]:
+    """校验 tool.log 单行时序：每行必须毫秒时间戳 + 三段标签，不得有续行。"""
+    errors: list[str] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            errors.append(f"第 {number} 行是空行；tool.log 不允许空行")
+            continue
+        match = TOOL_LOG_LINE_RE.match(line)
+        if not match:
+            errors.append(f"第 {number} 行不是单行时序格式（需 ms 时间戳 + [范围][动作][阶段]）")
+            continue
+        if match.group("kind") not in TOOL_LOG_KINDS:
+            errors.append(f"第 {number} 行使用未注册阶段标签 {match.group('kind')}")
+    return errors
+
+
+def render_tool_log(summary: Mapping[str, Any], records: Sequence[EventRecord]) -> str:
+    """把事件渲染成完整动作审计：每个事件一行，按 host 毫秒排序。
+
+    规则：
+    - TOOL 与 DEVICE 事件同一时序；不写续行、不写空行、不写汇总段落。
+    - 每行自足：范围/动作/阶段 + 做法 + 前后状态 + 判断依据 + 证据。
+    - 连续重复的 DEVICE 状态合并为一行并给出 repeat_count 与 last_hit。
+    """
+    ordered = sorted(
+        enumerate(records),
+        key=lambda pair: (ensure_ms(pair[1].time) or "9999-12-31 23:59:59.999", pair[0]),
+    )
+    lines: list[str] = []
+    last_scope: str | None = None
+    last_time: str | None = None
+    pending: dict[str, Any] | None = None
+    for _, record in ordered:
+        scope = _audit_scope(record)
+        stamp = ensure_ms(record.time)
+        since_prev = None
+        if stamp and last_time and scope == last_scope:
+            try:
+                delta = (datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S.%f")
+                         - datetime.strptime(last_time, "%Y-%m-%d %H:%M:%S.%f")).total_seconds()
+                since_prev = max(0.0, round(delta, 3))
+            except ValueError:
+                since_prev = None
+        signature = (
+            scope, _audit_category(record), _audit_kind(record),
+            record.event, _compact(record.actual, 160), _compact(record.details, 160),
+        )
+        is_device = isinstance(record.details, Mapping) and bool(record.details.get("device"))
+        if is_device and pending and pending["signature"] == signature:
+            # 受控去重：连续重复的设备状态只占一行，记录 repeat_count 与 last_hit。
+            pending["repeat"] += 1
+            pending["last"] = stamp
+            lines[pending["index"]] = (
+                f"{pending['base']} | repeat={pending['repeat']} | last_hit={pending['last']}"
+            )
+            continue
+        line = _audit_line(record, summary, since_prev=since_prev)
+        lines.append(line)
+        pending = {
+            "signature": signature, "repeat": 1, "last": stamp,
+            "index": len(lines) - 1, "base": line, "stamp": stamp,
+        }
+        last_scope, last_time = scope, stamp
+    return "\n".join(lines).rstrip() + "\n" if lines else ""
+
+
+# ---------------------------------------------------------------------------
+# 设备状态事件（DEVICE）：从 raw marker 派生，或由适配器直接提交
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class DeviceMarker:
+    source: str
+    code: str
+    pattern: re.Pattern[str]
+    message: str
+    kind: str = "STATE"
+    host_from: str = "record"
+    category: str | None = None
+    state: str | None = None
+
+
+class MarkerConfigError(ValueError):
+    pass
+
+
+def load_markers(value: Mapping[str, Any] | str | Path | None) -> tuple[list[DeviceMarker], re.Pattern[str] | None]:
+    """加载 profile 提供的设备 marker 表；框架不内置项目 marker。"""
+    if value is None:
+        return [], None
+    if isinstance(value, (str, Path)):
+        payload = json.loads(Path(value).read_text(encoding="utf-8"))
+    else:
+        payload = dict(value)
+    markers: list[DeviceMarker] = []
+    for index, item in enumerate(payload.get("markers") or []):
+        if not isinstance(item, Mapping):
+            raise MarkerConfigError(f"marker[{index}] 必须是对象")
+        for key in ("source", "code", "pattern"):
+            if not item.get(key):
+                raise MarkerConfigError(f"marker[{index}] 缺少 {key}")
+        try:
+            pattern = re.compile(str(item["pattern"]))
+        except re.error as error:
+            raise MarkerConfigError(f"marker[{index}] 正则不合法: {error}") from error
+        markers.append(DeviceMarker(
+            source=str(item["source"]),
+            code=str(item["code"]).upper(),
+            pattern=pattern,
+            message=one_line(item.get("message") or str(item["code"])),
+            kind=str(item.get("kind") or "STATE").upper(),
+            host_from=str(item.get("host_from") or "record"),
+            category=(str(item["category"]).upper() if item.get("category") else None),
+            state=(str(item["state"]) if item.get("state") else None),
+        ))
+    ts_pattern = payload.get("device_ts_pattern")
+    device_ts = re.compile(str(ts_pattern)) if ts_pattern else DEVICE_TS_RE
+    return markers, device_ts
+
+
+def _raw_texts(raw: Any, source: str) -> list[str]:
+    if not isinstance(raw, Mapping):
+        return [str(raw)] if isinstance(raw, str) else []
+    values: list[Any]
+    if source == "*":
+        values = list(raw.values())
+    else:
+        values = [raw.get(source)]
+    texts: list[str] = []
+    for value in values:
+        if isinstance(value, str):
+            texts.append(value)
+        elif isinstance(value, (list, tuple)):
+            texts.extend(item for item in value if isinstance(item, str))
+        elif isinstance(value, Mapping):
+            texts.append(json.dumps(value, ensure_ascii=False, default=str))
+    return texts
+
+
+def _offset_moment(base: str | None, offset: Any) -> str | None:
+    seconds = _num(offset)
+    if not base or seconds is None:
+        return None
+    try:
+        moment = datetime.strptime(base, "%Y-%m-%d %H:%M:%S.%f") + timedelta(seconds=float(seconds))
+    except ValueError:
+        return None
+    return moment.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
+def _marker_host_time(
+    record: EventRecord,
+    marker: DeviceMarker,
+    raw: Any,
+    round_power_on: Mapping[Any, str] | None = None,
+) -> str | None:
+    actual = record.actual if isinstance(record.actual, Mapping) else {}
+    normalized = record.normalized if isinstance(record.normalized, Mapping) else {}
+    if marker.host_from in {"play_start", "play_end"} and isinstance(raw, Mapping):
+        direct = ensure_ms(raw.get(marker.host_from))
+        if direct:
+            return direct
+    base = (round_power_on or {}).get(record.round)
+    if marker.host_from == "play_start":
+        return _offset_moment(base, normalized.get("play_start_offset_s"))
+    if marker.host_from == "play_end":
+        return _offset_moment(base, normalized.get("play_end_offset_s"))
+    if marker.host_from == "power_on":
+        return ensure_ms(actual.get("power_on_at")) or base
+    if marker.host_from == "power_on_minus_off":
+        power_on = ensure_ms(actual.get("power_on_at")) or base
+        expected = record.expected if isinstance(record.expected, Mapping) else {}
+        off_sec = _num(actual.get("off_sec")) or _num(expected.get("off_sec"))
+        if power_on and off_sec:
+            try:
+                moment = datetime.strptime(power_on, "%Y-%m-%d %H:%M:%S.%f") - timedelta(seconds=float(off_sec))
+                return moment.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            except ValueError:
+                return None
+    return ensure_ms(record.time)
+
+
+def derive_device_events(
+    records: Sequence[EventRecord],
+    markers: Sequence[DeviceMarker],
+    *,
+    device_ts_pattern: re.Pattern[str] | None = None,
+    round_power_on: Mapping[Any, str] | None = None,
+) -> list[EventRecord]:
+    """从 TOOL 事件的 raw 中派生 DEVICE 状态事件。
+
+    - 同一事件里连续相同的 marker 合并为一条，保留 repeat_count 与 last_hit。
+    - 无法解析的 raw 行不静默丢弃：调用方可用 :func:`device_unparsed_event` 显式提交。
+    """
+    if not markers:
+        return []
+    derived: list[EventRecord] = []
+    ts_re = device_ts_pattern or DEVICE_TS_RE
+    for record in records:
+        raw = record.raw_payload
+        if raw is None:
+            continue
+        for marker in markers:
+            texts = _raw_texts(raw, marker.source)
+            hits: list[dict[str, Any]] = []
+            for text in texts:
+                for match in marker.pattern.finditer(text):
+                    fields = {key: value for key, value in match.groupdict().items() if not _skip(value)}
+                    hits.append(fields)
+            if not hits:
+                continue
+            timestamp = _marker_host_time(record, marker, raw, round_power_on)
+            device_ts_match = ts_re.search(texts[0]) if texts else None
+            device_ts = device_ts_match.group(1) if device_ts_match else None
+            repeat = len(hits)
+            details: dict[str, Any] = {
+                "device": True,
+                "audit_category": marker.category or "DEVICE",
+                "audit_kind": marker.kind,
+                "marker": marker.code,
+                "repeat_count": repeat,
+                "source_event": record.event,
+                "source_event_seq": record.event_seq,
+                "parameters": hits[0],
+            }
+            if repeat > 1:
+                details["last_hit"] = timestamp
+            if device_ts:
+                details["device_ts"] = device_ts
+            if marker.state:
+                details["state"] = marker.state
+            evidence = list(record.evidence or [])
+            if not evidence and record.raw_ref and record.raw_ref.get("path"):
+                evidence = [{"path": record.raw_ref["path"]}]
+            derived.append(EventRecord(
+                event=marker.code,
+                time=timestamp or record.time,
+                level="INFO",
+                task_id=record.task_id,
+                round=record.round,
+                case_id=record.case_id,
+                phase=record.phase,
+                source="device",
+                device=record.device,
+                port_role=record.port_role,
+                attempt=record.attempt,
+                correlation_id=record.correlation_id,
+                message=marker.message,
+                details=details,
+                evidence=evidence,
+            ))
+    return derived
+
+
+def device_unparsed_event(
+    line: str,
+    *,
+    host_time: str | None = None,
+    evidence: Sequence[Mapping[str, Any]] | None = None,
+    task_id: str | None = None,
+    round_value: Any = None,
+) -> EventRecord:
+    """未知设备行：保留摘要 + SHA-256 + 证据定位，禁止静默丢弃。"""
+    text = one_line(line)
+    digest = sha256_bytes(str(line).encode("utf-8"))
+    return EventRecord(
+        event="DEVICE_UNPARSED",
+        time=ensure_ms(host_time) or now_human(),
+        level="WARN",
+        task_id=task_id,
+        round=round_value,
+        source="device",
+        message=f"未识别设备行: {_clip(text, 160)}",
+        details={"device": True, "audit_category": "DEVICE", "audit_kind": "STATE",
+                 "raw_sha256": digest, "raw_excerpt": _clip(text, 200), "unparsed": True},
+        evidence=normalize_evidence(list(evidence or [])),
+    )
+
+
+def write_device_event(
+    writer: "EventLogWriter",
+    line: str,
+    *,
+    host_time: str | None = None,
+    evidence: Sequence[Mapping[str, Any]] | None = None,
+    round_value: Any = None,
+) -> dict[str, Any]:
+    """适配器提交任何设备行：先按 marker 映射，未命中则记 DEVICE_UNPARSED。"""
+    record = device_unparsed_event(line, host_time=host_time, evidence=evidence,
+                                   task_id=writer.task_id, round_value=round_value)
+    return writer.emit(
+        record.event,
+        time=record.time, level=record.level, round=record.round,
+        source=record.source, message=record.message, details=record.details,
+        evidence=record.evidence,
+    )
 
 
 def _inline_value(value: Any, limit: int = 160) -> str:
@@ -1336,310 +2072,6 @@ def _inline_value(value: Any, limit: int = 160) -> str:
             return f"<{len(value)} items>"
         return encoded
     return _text(value)
-
-
-SKIP_FACT_KEYS = {
-    "required_checks", "checks", "aggregate", "gate", "counters",
-    "first_success_distribution", "wake_raw_any", "wake_raw", "start_raw",
-    "complete_raw", "stdout_stderr", "checks_all_true", "open_attempts",
-    "one_pcm_per_round",
-}
-
-#: run.log 的短标签表：只压缩框架自己的字段名，不改变任何取值。
-FACT_LABELS = {
-    "attempts_total": "attempts",
-    "first_success_attempt": "first_ok",
-    "first_play_start_offset_s": "play_s",
-    "recording_start_offset_s": "rec_start_s",
-    "first_wakeup_offset_s": "wake_s",
-    "play_start_offset_s": "play_s",
-    "play_end_offset_s": "play_end_s",
-    "response_start_offset_s": "resp_start_s",
-    "response_complete_offset_s": "resp_end_s",
-    "next_gap_s": "gap_s",
-    "wake_check_window_s": "window_s",
-    "power_on_at": "power_on",
-    "recording_start": "rec_start",
-    "format": "fmt",
-    "channels": "ch",
-    "avg_sec_per_round": "avg_s_per_round",
-    "recent_10_elapsed_sec": "recent10_s",
-}
-
-
-def _short_value(value: Any, limit: int = 60) -> str | None:
-    """run.log 单行事实的展示值；过长或无信息量返回 None（外置证据仍在 events）。"""
-    if _skip(value):
-        return None
-    if isinstance(value, Mapping):
-        parts = []
-
-        def render(item: Any) -> str:
-            text = _text(item)
-            return text[: limit - 1] + "…" if len(text) > limit else text
-
-        for key, item in value.items():
-            if isinstance(item, Mapping):
-                for sub, subitem in item.items():
-                    if _skip(subitem) or isinstance(subitem, Mapping):
-                        continue
-                    parts.append(f"{key}.{sub}={render(subitem)}")
-            elif not _skip(item):
-                parts.append(f"{key}={render(item)}")
-        return " ".join(parts) if parts else f"<{len(value)} keys>"
-    if isinstance(value, (list, tuple)):
-        return f"<{len(value)} items>"
-    text = _text(value)
-    if len(text) > limit:
-        return text[: limit - 1] + "…"
-    return text
-
-
-def _event_facts(record: EventRecord, summary: Mapping[str, Any]) -> list[str]:
-    """按通用规则抽取一行内的关键事实，不做项目字段猜测。
-
-    去重规则：同一 key 只显示一次；``actual`` 覆盖 ``expected`` 中的同名值；
-    与顶层字段重复的值（status/attempt/elapsed）不重复显示。
-    """
-    facts: list[str] = []
-    seen: dict[str, str] = {}
-
-    def add(key: str, value: Any, limit: int = 60) -> None:
-        if key in SKIP_FACT_KEYS or key.startswith("raw"):
-            return
-        if key == "status" and (record.status or "").upper() == str(value).upper():
-            return
-        text = _short_value(value, limit=64 if key == "sha256" else limit)
-        if text is None:
-            return
-        if seen.get(key) == text:
-            return
-        seen[key] = text
-        facts.append(f"{key}={text}")
-
-    if record.attempt is not None:
-        attempt = f"{_text(record.attempt)}"
-        if record.max_attempts is not None:
-            attempt += f"/{_text(record.max_attempts)}"
-        add("attempt", attempt)
-    if record.elapsed_ms is not None:
-        add("elapsed_ms", record.elapsed_ms)
-    if record.device and record.event != "DEVICE_BINDING":
-        if record.device != summary.get("_primary_device"):
-            add("device", record.device, limit=40)
-    if record.port_role:
-        add("port", record.port_role, limit=30)
-    if record.phase:
-        add("phase", record.phase, limit=24)
-    if record.case_id:
-        add("case", record.case_id, limit=30)
-    if record.broadcast_id:
-        add("bc", record.broadcast_id, limit=30)
-    if record.reason:
-        add("reason", record.reason, limit=40)
-    if record.handling:
-        add("handling", record.handling, limit=24)
-
-    for payload in (record.expected, record.actual, record.normalized):
-        if isinstance(payload, Mapping):
-            actual_map = record.actual if isinstance(record.actual, Mapping) else {}
-            for key, value in payload.items():
-                if payload is record.expected and key in actual_map:
-                    continue
-                add(FACT_LABELS.get(str(key), str(key)), value)
-    if record.details:
-        add("details", record.details, limit=220)
-    if record.evidence:
-        basenames = {fact.split("=", 1)[1].rsplit("/", 1)[-1] for fact in facts if "=" in fact}
-        refs = []
-        for ref in record.evidence:
-            path = ref.get("path") or ""
-            if path.rsplit("/", 1)[-1] in basenames:
-                continue
-            refs.append(f"{path}#{ref['line']}" if ref.get("line") is not None else path)
-        if refs:
-            add("evidence", ",".join(refs), limit=120)
-    if record.message:
-        facts.append(f"| {record.message}")
-    return facts
-
-
-def _special_line(record: EventRecord, summary: Mapping[str, Any]) -> list[str] | None:
-    event = record.event
-    if event in {"TASK_START", "TASK_STARTED"}:
-        facts = [f"task={record.task_id}"]
-        mode = _pick(record.expected if isinstance(record.expected, Mapping) else None, ("mode",))
-        target = summary.get("rates", {}).get("rounds_target")
-        if mode:
-            facts.append(f"mode={mode}")
-        if target:
-            facts.append(f"target_rounds={int(target)}")
-        if record.source:
-            facts.append(f"source={record.source}")
-        context = summary.get("environment", {})
-        if isinstance(context, Mapping):
-            if context.get("node"):
-                facts.append(f"node={context['node']}")
-            if context.get("runtime"):
-                facts.append(f"runtime={context['runtime']}")
-        return [" ".join(facts)]
-    if event in {"TASK_END", "TASK_FINISHED"}:
-        facts = []
-        if record.status:
-            facts.append(f"status={record.status}")
-        if record.reason:
-            facts.append(f"reason={record.reason}")
-        rates = summary.get("rates", {})
-        counts = summary.get("counts", {})
-        if counts:
-            facts.append(f"rounds={counts.get('rounds_total')}/{rates.get('rounds_target') or '?'}")
-        facts.append(f"test_outcome={summary.get('test_outcome')}")
-        gate = summary.get("gate") or {}
-        gate_state = "UNKNOWN" if gate.get("gate_pass") is None else ("PASS" if gate.get("gate_pass") else "FAIL")
-        gate_text = gate_state + (f"({','.join(gate.get('failed_checks') or [])})" if gate_state == "FAIL" else "")
-        facts.append(f"gate={gate_text}")
-        facts.append(f"delivery={summary.get('delivery_status')}")
-        facts.append(f"final={summary.get('final_status')}")
-        return [" ".join(facts)]
-    if event == "MILESTONE" and isinstance(record.actual, Mapping):
-        aggregate = record.actual.get("aggregate") if isinstance(record.actual.get("aggregate"), Mapping) else {}
-        facts = []
-        if record.actual.get("completed_rounds") is not None:
-            facts.append(f"rounds={record.actual.get('completed_rounds')}/{record.actual.get('target_rounds')}")
-        for key in ("pass", "fail", "blocked", "avg_attempts", "success_rate", "no_wakeup_total"):
-            if aggregate.get(key) is not None:
-                facts.append(f"{key}={_text(aggregate[key])}")
-        for key in ("avg_sec_per_round", "recent_10_elapsed_sec", "free_gb"):
-            if record.actual.get(key) is not None:
-                facts.append(f"{key}={_text(record.actual[key])}")
-        return [" ".join(facts) or "里程碑已写入"]
-    if event == "ROUND_RESULT" or event == "CASE_RESULT":
-        facts = []
-        if record.status:
-            facts.append(f"result={record.status}")
-        actual = record.actual if isinstance(record.actual, Mapping) else {}
-        for key in ("attempts_total", "first_success_attempt", "first_play_start_offset_s",
-                    "recording_start_offset_s", "first_wakeup_offset_s"):
-            if actual.get(key) is not None:
-                facts.append(f"{FACT_LABELS.get(key, key)}={_text(actual[key])}")
-        if record.reason:
-            facts.append(f"reason={record.reason}")
-        return [" ".join(facts)]
-    if event in {"PDU_CYCLE", "SERIAL_OPEN", "DEVICE_BINDING", "RECORDING"}:
-        return None  # 走通用事实渲染
-    return None
-
-
-def render_run_log(summary: Mapping[str, Any], records: Sequence[EventRecord]) -> str:
-    """渲染紧凑人读时间线。纯函数：同一 summary+events 必须得到同一字节。"""
-    meta = summary.get("meta", {})
-    rates = summary.get("rates", {})
-    counts = summary.get("counts", {})
-    lines: list[str] = []
-    lines.append(
-        "# lstest run.log v2 | task={task} | events={events} | rounds={rounds}/{target}".format(
-            task=summary.get("task_id") or "-",
-            events=meta.get("events_count", len(records)),
-            rounds=counts.get("rounds_total", 0),
-            target=rates.get("rounds_target") or "?",
-        )
-    )
-    title = meta.get("title") or meta.get("purpose") or summary.get("task_id") or "-"
-    lines.append(f"# 测了什么: {title}")
-    lines.append(
-        "# 结论: test_outcome={outcome} delivery={delivery} final={final}"
-        "（依据与证据见 summary.md）".format(
-            outcome=summary.get("test_outcome"),
-            delivery=summary.get("delivery_status"),
-            final=summary.get("final_status"),
-        )
-    )
-    last_round: Any = None
-    seen_round = False
-    for record in records:
-        round_value = record.round
-        special = _special_line(record, summary)
-        if special is None:
-            facts = _event_facts(record, summary)
-            body = " ".join(facts)
-            if record.event == "BROADCAST" and isinstance(record.actual, Mapping):
-                start = record.actual.get("play_start") or ""
-                end = record.actual.get("play_end") or ""
-                if start and end:
-                    try:
-                        duration = (datetime.strptime(end, "%Y-%m-%d %H:%M:%S.%f")
-                                    - datetime.strptime(start, "%Y-%m-%d %H:%M:%S.%f")).total_seconds()
-                        body = f"dur={duration:.3f}s " + body
-                    except ValueError:
-                        pass
-            special = [body]
-        prefix = _clock(record)
-        tag = record.event
-        if round_value is not None and round_value != last_round:
-            if seen_round:
-                lines.append("")
-            prefix = f"R{int(round_value):02d} " + prefix
-            last_round = round_value
-            seen_round = True
-        else:
-            prefix = "    " + prefix
-        status = f" {record.status}" if record.status else ""
-        lines.append(f"{prefix} {tag:<14}{status} {special[0]}".rstrip())
-        if record.status and str(record.status).upper() not in STATUS_SUCCESS:
-            detail = _anomaly_detail(record)
-            if detail:
-                lines.append(f"{'':<19} └ {detail}")
-
-    lines.append("")
-    anomalies = summary.get("anomalies") or []
-    top = "；".join(f"{item['code']} ×{item['count']}" for item in anomalies[:4]) or "无"
-    lines.append(
-        "SUMMARY rounds={rounds}/{target} pass={pass_} fail={fail} blocked={blocked} "
-        "round_success_rate={round_rate}% first_attempt_success_rate={first_rate}%".format(
-            rounds=counts.get("rounds_total", 0),
-            target=rates.get("rounds_target") or "?",
-            pass_=counts.get("pass", 0),
-            fail=counts.get("fail", 0),
-            blocked=counts.get("blocked", 0),
-            round_rate=_text(rates.get("round_success_rate")),
-            first_rate=_text(rates.get("first_attempt_success_rate")),
-        )
-    )
-    lines.append(f"SUMMARY 异常: {top}")
-    responsibility = summary.get("responsibility") or {}
-    lines.append(
-        "SUMMARY 责任层={layer}（{basis}）".format(
-            layer=responsibility.get("layer", "unknown"),
-            basis=responsibility.get("basis", "未判定"),
-        )
-    )
-    lines.append("SUMMARY 缺口: " + ("；".join(summary.get("missing") or []) or "无"))
-    steps = summary.get("next_steps") or []
-    lines.append("SUMMARY 下一步: " + ("；".join(steps) if steps else "无"))
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _anomaly_detail(record: EventRecord) -> str:
-    parts: list[str] = []
-    actual = record.actual if isinstance(record.actual, Mapping) else {}
-    for key, value in actual.items():
-        if key in {"play_start", "play_end"}:
-            continue
-        if _skip(value):
-            continue
-        parts.append(f"{key}={_inline_value(value, limit=120)}")
-    if isinstance(record.normalized, Mapping):
-        for key, value in record.normalized.items():
-            if key in {"play_start_offset_s", "play_end_offset_s"} or _skip(value):
-                continue
-            parts.append(f"{key}={_inline_value(value, limit=80)}")
-    if not parts and isinstance(record.details, Mapping):
-        for key, value in record.details.items():
-            if not _skip(value):
-                parts.append(f"{key}={_inline_value(value, limit=80)}")
-    if record.evidence:
-        parts.append("evidence=" + ",".join(str(item.get("path")) for item in record.evidence[:3]))
-    return " ".join(parts) or (record.message or "")
 
 
 def _fmt_pct(value: Any, numerator: int | None = None, denominator: int | None = None) -> str:
@@ -1863,7 +2295,10 @@ def _round_line(item: Mapping[str, Any]) -> str:
 def write_bundle(records: Sequence[EventRecord], out_dir: Path, *,
                  meta: Mapping[str, Any] | None = None,
                  events_path: Path | None = None) -> dict[str, Any]:
-    """写 run.log / summary.md / summary.json；返回落盘的 summary。"""
+    """写 tool.log / summary.md / summary.json；返回落盘的 summary。
+
+    ``tool.log`` 是完整动作审计（每个事件一行），不是摘要；结论只存在于 summary。
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     records = list(records)
@@ -1877,7 +2312,7 @@ def write_bundle(records: Sequence[EventRecord], out_dir: Path, *,
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     (out_dir / "summary.md").write_text(render_summary_md(summary), encoding="utf-8")
-    (out_dir / "run.log").write_text(render_run_log(summary, records), encoding="utf-8")
+    (out_dir / "tool.log").write_text(render_tool_log(summary, records), encoding="utf-8")
     return payload
 
 
@@ -1942,7 +2377,7 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False) -> list[dict[str,
         add("BAD_SUMMARY", "ERROR", f"summary.json 不是合法 JSON: {error}")
         return findings
 
-    for name in ("run.log", "summary.md"):
+    for name in ("tool.log", "summary.md"):
         if not (run_dir / name).is_file():
             add("MISSING_OUTPUT", "ERROR", f"缺少 {name}")
 
@@ -1969,11 +2404,13 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False) -> list[dict[str,
     if stored.get("task_id") != expected.get("task_id"):
         add("SUMMARY_DRIFT", "WARN", "summary.json task_id 与事件重算不一致")
 
-    if (run_dir / "run.log").is_file():
-        rendered = render_run_log(regenerated, records)
-        actual = (run_dir / "run.log").read_text(encoding="utf-8")
-        if rendered != actual:
-            add("RUNLOG_DRIFT", "ERROR", "run.log 与事件重算不一致（疑似手工修改）")
+    if (run_dir / "tool.log").is_file():
+        tool_log = (run_dir / "tool.log").read_text(encoding="utf-8")
+        rendered = render_tool_log(regenerated, records)
+        if rendered != tool_log:
+            add("TOOL_LOG_DRIFT", "ERROR", "tool.log 与事件重算不一致（疑似手工修改）")
+        for problem in validate_tool_log_text(tool_log):
+            add("TOOL_LOG_FORMAT", "ERROR", problem)
 
     gate = expected.get("gate") or {}
     if gate and gate.get("gate_pass") is False and expected.get("final_status") == "PASS":
@@ -1986,7 +2423,7 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False) -> list[dict[str,
     if failures:
         add("SOURCE_FAILURE_EVENTS", "WARN", f"源日志含 {len(failures)} 条失败状态事件")
 
-    for name in ("events.jsonl", "run.log", "summary.md", "summary.json"):
+    for name in ("events.jsonl", "tool.log", "summary.md", "summary.json"):
         path = run_dir / name
         if not path.is_file():
             continue
@@ -2027,5 +2464,7 @@ def schema_document() -> dict[str, Any]:
         "artifact_gate_checks": sorted(ARTIFACT_GATE_CHECKS),
         "blocking_gate_checks": sorted(BLOCKING_GATE_CHECKS),
         "raw_externalization": "所有 raw 写入 raw/e<seq>_<EVENT>.json，events 只保留 path/sha256/bytes/lines",
-        "timeline_rule": "run.log 的时钟为北京时间 HH:MM:SS.mmm；同一 events+meta 必须渲染出同一字节",
+        "tool_log_rule": "tool.log 每个事件恰好一行，按 host 毫秒排序，含做法/状态/判断/证据，禁止续行与摘要",
+        "tool_log_line": "<YYYY-MM-DD HH:MM:SS.mmm> [<范围>][<动作>][<阶段>]([<结果>]) <描述> | k=v | evidence=<路径#行号>",
+        "device_rule": "DEVICE 事件与 TOOL 事件同一毫秒时序；连续重复状态合并并记 repeat_count/last_hit",
     }

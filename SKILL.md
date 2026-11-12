@@ -21,9 +21,9 @@ description: 面向新设备项目的通用测试验证与压测框架，提供�
 - profile 的 `presentation_capture` 是唯一展示值。`tool.log` 只显示 `KEY: 原始捕获值`，不显示正则、规则 ID、捕获字段名、内部关联 ID 或绝对路径。
 - 播放器原始 marker 必须原样显示。`state_class` 仅供去重、窗口和耗时计算，绝不能改写显示文本。
 - 每个活动 case 中到达的事实都立即按顺序显示，包括播报前与异常后；每轮只有一次 `[RESULT]`。必需而缺失的事实在轮末以空值行补齐。
-- 结果目录：v1 仅保留 `serial_logs/*.log`、`tool.log`、`results.csv`、`cases.csv`；v2 增加 `events.jsonl`、`raw/`、`run.log`、`summary.md`、`summary.json`（`tool.log` 变为可选的实时账本）。禁止 `.bin`、`task.log`、`tool_logs` 和临时结果文件。
-- v2 的结论只能由 `events.jsonl` 计算：`run.log`/`summary.md`/`summary.json` 均为确定性渲染物，禁止手改；`gate_pass=false` 时最终状态禁止 PASS。
-- 项目适配器不得自行拼 JSONL 或写 `run.log`/`summary.*`；必须通过 `EventLogWriter` 或 `TaskArtifacts(structured_events=True)`。
+- 结果目录：v1 仅保留 `serial_logs/*.log`、`tool.log`、`results.csv`、`cases.csv`；v2 增加 `events.jsonl`、`raw/`、`summary.md`、`summary.json`，`tool.log` 升级为完整动作审计（TOOL 动作 + DEVICE 状态，每事件一行、毫秒）。运行中实时账本为 `tool.live.log`。禁止 `.bin`、`task.log`、`tool_logs` 和临时结果文件。
+- v2 的结论只能由 `events.jsonl` 计算：`tool.log`/`summary.md`/`summary.json` 均为确定性渲染物，禁止手改；`gate_pass=false` 时最终状态禁止 PASS。
+- 项目适配器不得自行拼 JSONL 或写 `tool.log`/`summary.*`；必须通过 `EventLogWriter` 或 `TaskArtifacts(structured_events=True)`；设备行用 `write_device_event()` 提交（未识别行自动记 `DEVICE_UNPARSED`）。
 
 ## 新 canonical 分层（profile / case / adapter）
 
@@ -159,7 +159,7 @@ python -u lstest/scripts/lstest.py preflight --profile <project-profile.json>
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --device-snapshot <device-role-map.json>
 python -u lstest/scripts/lstest.py tts --text-file utterance.txt --voice 付小春 --output audio/sample.wav
 python -u lstest/scripts/lstest.py audio scan --direction Render --json
-python -u lstest/scripts/lstest.py eventlog build --legacy <旧平铺日志> --out-dir <新结果目录> --meta <任务上下文.json>
+python -u lstest/scripts/lstest.py eventlog build --legacy <旧平铺日志> --out-dir <新结果目录> --meta <任务上下文.json> --markers <设备marker表.json>
 python -u lstest/scripts/lstest.py eventlog verify --run-dir <结果目录> [--check-files]
 ```
 

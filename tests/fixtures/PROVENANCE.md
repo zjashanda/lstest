@@ -10,7 +10,9 @@
 | 原始大小 | 59,106 字节 / 1,595 行 / 55 个事件 |
 | 采集时间 | 2026-11-12 17:01:56 – 17:07:09（北京时间） |
 | 来源 | NOAH-68 附件 `pasted-text.txt`（用户提供的真实工具日志） |
-| 样本大小 | 59,080 字节 / 55 个事件 |
+| 样本大小 | 59,080 字节 / 55 个 TOOL 事件 |
+| 设备 marker 表 | `tests/fixtures/legacy_flat_v1_smoke10.markers.json` |
+| 迁移后事件 | 105（55 TOOL + 50 DEVICE），`tool.log` 105 行 |
 
 ## 为什么保留
 
@@ -41,7 +43,8 @@ sha256sum tests/fixtures/legacy_flat_v1_smoke10.txt
 python -m lstest.scripts.lstest eventlog build \
   --legacy tests/fixtures/legacy_flat_v1_smoke10.txt \
   --out-dir /tmp/v2-check \
-  --meta tests/fixtures/legacy_flat_v1_smoke10.meta.json
+  --meta tests/fixtures/legacy_flat_v1_smoke10.meta.json \
+  --markers tests/fixtures/legacy_flat_v1_smoke10.markers.json
 python -m lstest.scripts.lstest eventlog verify --run-dir /tmp/v2-check
 ```
 

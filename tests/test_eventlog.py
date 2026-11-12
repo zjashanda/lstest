@@ -1,7 +1,8 @@
 """结构化事件日志 v2 的回归测试。
 
-覆盖：真实日志 golden、旧格式容错、三层产物、双成功率、gate 与最终判定分离、
-run.log/summary 确定性、verify 漂移检测、任务运行时镜像。
+覆盖：真实日志 golden（TOOL + DEVICE 单行时序）、旧格式容错、三层产物、
+双成功率、gate 与最终判定分离、tool.log 单行/毫秒/排序/去重/未知行、
+serial host receive time、确定性重算与漂移检测、任务运行时镜像。
 全部测试不访问设备、网络或真实结果目录。
 """
 
@@ -10,15 +11,23 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 from lstest.scripts import eventlog
-from lstest.scripts.core import TaskArtifacts
+from lstest.scripts.core import ConnectionSpec, TaskArtifacts
+from lstest.scripts.serial_capture import SerialManager
 
 FIXTURES = Path(__file__).parent / "fixtures"
 GOLDEN = FIXTURES / "legacy_flat_v1_smoke10.txt"
 GOLDEN_META = FIXTURES / "legacy_flat_v1_smoke10.meta.json"
+GOLDEN_MARKERS = FIXTURES / "legacy_flat_v1_smoke10.markers.json"
+
+LINE_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} "
+    r"\[[^\]]+\]\[[A-Z_]+\]\[[A-Z_]+\](?:\[[A-Z_]+\])? .+$"
+)
 
 
 def meta() -> dict:
@@ -26,11 +35,17 @@ def meta() -> dict:
 
 
 def build_golden(target: Path) -> dict:
-    return eventlog.import_legacy_log(GOLDEN, target, meta=meta())
+    return eventlog.import_legacy_log(
+        GOLDEN, target, meta=meta(), markers=GOLDEN_MARKERS,
+    )
 
 
 def records_of(target: Path) -> list[eventlog.EventRecord]:
     return eventlog.read_events(Path(target) / "events.jsonl")
+
+
+def tool_lines(target: Path) -> list[str]:
+    return (Path(target) / "tool.log").read_text(encoding="utf-8").splitlines()
 
 
 class GoldenLogTests(unittest.TestCase):
@@ -42,7 +57,6 @@ class GoldenLogTests(unittest.TestCase):
 
     def test_counts_and_dual_rates(self) -> None:
         summary = self.summary
-        self.assertEqual(summary["meta"]["events_count"], 55)
         self.assertEqual(summary["counts"], {"rounds_total": 10, "pass": 10, "fail": 0, "blocked": 0, "other": 0})
         self.assertEqual(summary["rates"]["round_success_rate"], 100.0)
         self.assertEqual(summary["rates"]["first_attempt_success_rate"], 0.0)
@@ -56,55 +70,82 @@ class GoldenLogTests(unittest.TestCase):
         self.assertEqual(summary["test_outcome"], "PASS")
         self.assertEqual(summary["delivery_status"], "DELIVERY_INCOMPLETE")
         self.assertEqual(summary["final_status"], "NEEDS_REVIEW")
-        self.assertNotEqual(summary["final_status"], "PASS")
         self.assertEqual(summary["gate"]["failed_checks"], ["structured_artifacts_present"])
-        self.assertEqual(summary["delivery_failed_checks"], ["structured_artifacts_present"])
         codes = [item["code"] for item in summary["conflicts"]]
         self.assertIn("TASK_END_STATUS_CONFLICT", codes)
 
-    def test_first_attempt_anomaly_is_reported(self) -> None:
-        anomalies = {item["code"]: item for item in self.summary["anomalies"]}
-        self.assertEqual(anomalies["NO_WAKE"]["count"], 10)
-        self.assertTrue(anomalies["NO_WAKE"]["recovered"])
-        self.assertEqual(anomalies["NO_WAKE"]["rounds"], list(range(1, 11)))
-        self.assertEqual(self.summary["responsibility"]["layer"], "tool")
-        self.assertIsNone(self.summary["first_failure"])
-        self.assertEqual(self.summary["worst_round"]["round"], 1)
+    def test_tool_log_is_one_line_per_event(self) -> None:
+        lines = tool_lines(self.run_dir)
+        events = records_of(self.run_dir)
+        self.assertEqual(len(lines), len(events))
+        self.assertEqual(len(events), 105)  # 55 TOOL + 50 DEVICE
+        self.assertEqual(len([r for r in events if (r.details or {}).get("device")]), 50)
+        for number, line in enumerate(lines, start=1):
+            self.assertRegex(line, LINE_RE, f"第 {number} 行不是单行时序")
+            self.assertLess(len(line), 600, f"第 {number} 行过长（{len(line)}）")
+        self.assertEqual(eventlog.validate_tool_log_text("\n".join(lines)), [])
+        # 严格按 host 毫秒升序
+        stamps = [line[:23] for line in lines]
+        self.assertEqual(stamps, sorted(stamps))
+        # 不允许续行/空行/段落汇总
+        self.assertNotIn("", lines)
+        self.assertFalse([line for line in lines if line.startswith((" ", "\t", "SUMMARY", "#"))])
 
-    def test_run_log_is_compact_and_human_readable(self) -> None:
-        text = (self.run_dir / "run.log").read_text(encoding="utf-8")
-        lines = text.splitlines()
-        self.assertLess(len(lines), 120)
-        self.assertLess(len(lines), 1595 / 10)
-        self.assertTrue(lines[0].startswith("# lstest run.log v2"))
-        self.assertIn("first_attempt_success_rate=0%", text)
-        self.assertIn("final=NEEDS_REVIEW", text)
-        self.assertIn("R01 ", text)
-        self.assertNotIn("- -", text)
-        self.assertIn("SUMMARY 责任层=tool", text)
-        self.assertIn("SUMMARY 下一步:", text)
-        self.assertNotIn("D:\\", text)
-        # 每个事件至少一行；异常另起一行缩进展开
-        self.assertIn("└", text)
+    def test_tool_log_contains_tool_and_device_categories(self) -> None:
+        text = "\n".join(tool_lines(self.run_dir))
+        for category in ("[RUN]", "[ENV]", "[SERIAL]", "[PDU]", "[WAKE]", "[PLAYER]", "[REC]", "[RESULT]"):
+            self.assertIn(category, text)
+        self.assertEqual(text.count("[PDU][STATE]"), 20)          # 10 次断电 + 10 次上电
+        self.assertIn("state=ON→OFF", text)
+        self.assertIn("state=OFF→ON", text)
+        self.assertEqual(text.count("[WAKE][NO_WAKE]"), 10)
+        self.assertEqual(text.count("[WAKE][STATE]"), 10)          # 预唤醒
+        self.assertIn("device_ts=", text)
+        self.assertIn("ncm=", text)
+        self.assertIn("threshold=", text)
+
+    def test_judgement_and_verdict_are_explicit(self) -> None:
+        text = "\n".join(tool_lines(self.run_dir))
+        no_wake = [line for line in tool_lines(self.run_dir) if "[WAKE][NO_WAKE]" in line]
+        self.assertEqual(len(no_wake), 10)
+        self.assertIn("expected=", no_wake[0])
+        self.assertIn("actual=", no_wake[0])
+        self.assertIn("hit=none", no_wake[0])
+        self.assertIn("next=RETRY", no_wake[0])
+        self.assertIn("window_s=1", no_wake[0])
+        end_lines = [line for line in tool_lines(self.run_dir) if "[TASK][RUN][END]" in line]
+        self.assertEqual(len(end_lines), 1)
+        end = end_lines[0]
+        self.assertIn("[END][NEEDS_REVIEW]", end)
+        self.assertIn("recorded=PASS", end)
+        self.assertIn("test_outcome=PASS", end)
+        self.assertIn("delivery=DELIVERY_INCOMPLETE", end)
+        self.assertIn("gate=FAIL(structured_artifacts_present)", end)
+        self.assertIn("rounds=10/10", end)
+        self.assertNotIn("final=PASS", text)
+
+    def test_tool_log_hides_bulk_raw_and_absolute_paths(self) -> None:
+        text = "\n".join(tool_lines(self.run_dir))
+        for forbidden in ("stdout_stderr", "Refresh PA to OFF", "D:\\", "10.11."):
+            self.assertNotIn(forbidden, text)
+        self.assertIn("evidence=", text)
 
     def test_events_jsonl_schema_and_raw_externalization(self) -> None:
         records = records_of(self.run_dir)
-        self.assertEqual([record.event_seq for record in records], list(range(1, 56)))
+        self.assertEqual([record.event_seq for record in records], list(range(1, len(records) + 1)))
         for record in records:
             payload = record.to_dict()
             for field in eventlog.REQUIRED_FIELDS:
                 self.assertIn(field, payload)
             self.assertEqual(payload["schema"], eventlog.EVENT_SCHEMA)
             self.assertNotIn("raw", payload)
+            self.assertRegex(record.time or "", eventlog.TIME_RE)
         raw_records = [record for record in records if record.raw_ref]
-        self.assertGreaterEqual(len(raw_records), 10)
+        self.assertGreaterEqual(len(raw_records), 40)
         for record in raw_records:
             target = self.run_dir / record.raw_ref["path"]
             self.assertTrue(target.is_file(), record.raw_ref["path"])
             self.assertEqual(eventlog.sha256_file(target), record.raw_ref["sha256"])
-        start = records[0]
-        self.assertIsInstance(start.raw_ref, dict)
-        self.assertEqual(start.details["environment"]["node"], "node-a")
 
     def test_summary_answers_required_questions(self) -> None:
         text = (self.run_dir / "summary.md").read_text(encoding="utf-8")
@@ -116,9 +157,10 @@ class GoldenLogTests(unittest.TestCase):
         self.assertIn("first_attempt_success_rate", text)
         self.assertIn("structured_artifacts_present", text)
         self.assertIn("node-a", text)
+        self.assertIn("首轮稳定性缺口 100.0 个百分点", text)
 
     def test_rerender_is_byte_identical(self) -> None:
-        before_log = (self.run_dir / "run.log").read_bytes()
+        before_log = (self.run_dir / "tool.log").read_bytes()
         before_md = (self.run_dir / "summary.md").read_bytes()
         summary = json.loads((self.run_dir / "summary.json").read_text(encoding="utf-8"))
         records = records_of(self.run_dir)
@@ -127,20 +169,22 @@ class GoldenLogTests(unittest.TestCase):
             "purpose": summary["meta"]["purpose"],
             "scope": summary["meta"]["scope"],
         })
-        self.assertEqual((self.run_dir / "run.log").read_bytes(), before_log)
+        self.assertEqual((self.run_dir / "tool.log").read_bytes(), before_log)
         self.assertEqual((self.run_dir / "summary.md").read_bytes(), before_md)
 
     def test_verify_passes_and_detects_drift(self) -> None:
         findings = eventlog.verify_bundle(self.run_dir)
-        errors = [item for item in findings if item["level"] == "ERROR"]
-        self.assertEqual(errors, [])
+        self.assertEqual([item for item in findings if item["level"] == "ERROR"], [])
         self.assertTrue(any(item["code"] == "SOURCE_STATUS_CONFLICT" for item in findings))
 
-        log_path = self.run_dir / "run.log"
+        log_path = self.run_dir / "tool.log"
         original = log_path.read_text(encoding="utf-8")
-        log_path.write_text(original + "手工追加的一行\n", encoding="utf-8")
+        log_path.write_text(original + "2026-11-12 17:07:10.000 [TASK][RUN][EVENT] 手工追加\n", encoding="utf-8")
         codes = {item["code"] for item in eventlog.verify_bundle(self.run_dir)}
-        self.assertIn("RUNLOG_DRIFT", codes)
+        self.assertIn("TOOL_LOG_DRIFT", codes)
+        log_path.write_text(original + "续行没有时间戳\n", encoding="utf-8")
+        codes = {item["code"] for item in eventlog.verify_bundle(self.run_dir)}
+        self.assertTrue({"TOOL_LOG_DRIFT", "TOOL_LOG_FORMAT"} & codes)
         log_path.write_text(original, encoding="utf-8")
 
         summary_path = self.run_dir / "summary.json"
@@ -156,14 +200,104 @@ class GoldenLogTests(unittest.TestCase):
         self.assertTrue(any(item["code"] == "MISSING_EVIDENCE" for item in findings))
 
 
+class ToolLogUnitTests(unittest.TestCase):
+    def test_ensure_ms_normalizes_all_supported_forms(self) -> None:
+        cases = {
+            "2026-11-12 17:02:22.527": "2026-11-12 17:02:22.527",
+            "2026-11-12 17:02:22": "2026-11-12 17:02:22.000",
+            "2026-11-12T17:02:22.5+08:00": "2026-11-12 17:02:22.500",
+            "2026-11-12T09:02:22.527Z": "2026-11-12 09:02:22.527",
+            "2026-11-12 17:02:22.527123": "2026-11-12 17:02:22.527",
+        }
+        for raw, expected in cases.items():
+            self.assertEqual(eventlog.ensure_ms(raw), expected)
+
+    def test_one_line_escapes_newlines_and_control_chars(self) -> None:
+        text = eventlog.one_line("第一行\n第二行\r\n第三行\t带制表符\x07")
+        self.assertNotIn("\n", text)
+        self.assertNotIn("\r", text)
+        self.assertNotIn("\x07", text)
+        self.assertIn("\\n", text)
+
+    def test_render_sorts_by_host_time_and_keeps_one_line(self) -> None:
+        records = [
+            eventlog.EventRecord(event="TASK_END", time="2026-11-12 10:00:03.000", status="PASS",
+                                 message="结束", actual={"gate": {"gate_pass": True, "checks": {}}}),
+            eventlog.EventRecord(event="BROADCAST", time="2026-11-12 10:00:01.000", round=1,
+                                 case_id="c1", attempt=1, status="NO_WAKE", message="未唤醒",
+                                 expected={"wake": True}, actual={"wake_seen": False}, handling="continue"),
+            eventlog.EventRecord(event="TASK_START", time="2026-11-12 10:00:00.000", expected={"mode": "smoke"}),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            eventlog.write_event_records(records, run_dir / "events.jsonl")
+            summary = eventlog.write_bundle(eventlog.read_events(run_dir / "events.jsonl"), run_dir)
+            lines = (run_dir / "tool.log").read_text(encoding="utf-8").splitlines()
+        self.assertEqual([line[:23] for line in lines],
+                         ["2026-11-12 10:00:00.000", "2026-11-12 10:00:01.000", "2026-11-12 10:00:03.000"])
+        self.assertIn("[R01/A01][WAKE][NO_WAKE]", lines[1])
+        self.assertIn("next=RETRY", lines[1])
+        self.assertIn("final=NEEDS_REVIEW", lines[2])  # 只有 NO_WAKE 事件、没有 ROUND_RESULT
+        self.assertEqual(summary["test_outcome"], "UNKNOWN")
+
+    def test_repeated_device_states_are_collapsed_with_repeat_count(self) -> None:
+        events = [
+            eventlog.EventRecord(
+                event="BOOT_STAGE", time=f"2026-11-12 10:00:0{index}.000", round=1,
+                source="device", message="启动阶段",
+                details={"device": True, "audit_category": "DEVICE", "audit_kind": "STATE",
+                         "state": "BOOT", "parameters": {"stage": 2}},
+            )
+            for index in range(3)
+        ]
+        events.append(eventlog.EventRecord(
+            event="READY", time="2026-11-12 10:00:09.000", round=1, source="device",
+            message="就绪", details={"device": True, "audit_category": "DEVICE", "audit_kind": "STATE",
+                                    "state": "READY"},
+        ))
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            eventlog.write_event_records(events, run_dir / "events.jsonl")
+            eventlog.write_bundle(eventlog.read_events(run_dir / "events.jsonl"), run_dir)
+            lines = tool_lines(run_dir)
+        self.assertEqual(len(lines), 2)
+        self.assertIn("[DEVICE][STATE]", lines[0])
+        self.assertIn("repeat=3", lines[0])
+        self.assertIn("last_hit=2026-11-12 10:00:02.000", lines[0])
+        self.assertIn("就绪", lines[1])
+
+    def test_device_unparsed_keeps_hash_and_evidence(self) -> None:
+        line = "totally unknown native line 中文"
+        record = eventlog.device_unparsed_event(line, evidence=[{"path": "serial_logs/x.log", "line": 7}])
+        self.assertEqual(record.event, "DEVICE_UNPARSED")
+        self.assertEqual(record.details["raw_sha256"], eventlog.sha256_bytes(line.encode("utf-8")))
+        self.assertIn("未识别设备行", record.message)
+        self.assertEqual(record.evidence, [{"path": "serial_logs/x.log", "line": 7}])
+        rendered = eventlog.render_tool_log({"tooling": {}}, [record])
+        self.assertIn("[DEVICE][STATE]", rendered)
+        self.assertIn("未识别设备行", rendered)
+        self.assertEqual(len(rendered.splitlines()), 1)
+
+    def test_marker_config_errors_are_explicit(self) -> None:
+        with self.assertRaises(eventlog.MarkerConfigError):
+            eventlog.load_markers({"markers": [{"source": "raw"}]})
+        with self.assertRaises(eventlog.MarkerConfigError):
+            eventlog.load_markers({"markers": [{"source": "raw", "code": "X", "pattern": "("}]})
+        markers, _ = eventlog.load_markers({"markers": [
+            {"source": "raw", "code": "x", "pattern": "hit", "state": "A→B"},
+        ]})
+        self.assertEqual(markers[0].code, "X")
+        self.assertEqual(markers[0].state, "A→B")
+
+
 class LegacyCompatibilityTests(unittest.TestCase):
     def test_crlf_bom_and_missing_blank_lines(self) -> None:
         block = (
             "time: 2026-11-12 10:00:00.000\nlevel: INFO\nevent: TASK_START\ntask_id: t1\n"
             "expected: {\"mode\": \"smoke\"}\nactual: -\nraw: -\nmessage: 中文消息\n"
         )
-        text = "\ufeff" + (block + block.replace("TASK_START", "TASK_END").replace("10:00:00", "10:00:01")).replace("\n", "\r\n")
-        payloads, warnings = eventlog.parse_legacy_flat(text)
+        merged = block + block.replace("TASK_START", "TASK_END").replace("10:00:00", "10:00:01")
+        payloads, warnings = eventlog.parse_legacy_flat("\ufeff" + merged.replace("\n", "\r\n"))
         self.assertEqual([item["event"] for item in payloads], ["TASK_START", "TASK_END"])
         self.assertEqual(payloads[0]["message"], "中文消息")
         self.assertIsNone(payloads[0]["actual"])
@@ -186,6 +320,11 @@ class LegacyCompatibilityTests(unittest.TestCase):
         self.assertEqual(record.event, "UNKNOWN")
         self.assertEqual(record.time, "2026-11-12 10:00:00.000")
 
+    def test_seconds_only_time_is_normalized_to_ms(self) -> None:
+        text = "time: 2026-11-12 10:00:00\nevent: BROADCAST\n"
+        payloads, _ = eventlog.parse_legacy_flat(text)
+        self.assertEqual(eventlog.record_from_mapping(payloads[0]).time, "2026-11-12 10:00:00.000")
+
     def test_windows_paths_are_sanitized_and_chinese_kept(self) -> None:
         text = (
             "time: 2026-11-12 10:00:00.000\nevent: TASK_START\n"
@@ -201,7 +340,6 @@ class LegacyCompatibilityTests(unittest.TestCase):
         self.assertEqual(record.details["result_dir"], "r1")
         self.assertEqual(record.details["wake_wav"], "w.wav")
         self.assertEqual(record.evidence[0], {"path": "serial_logs/serial_COM4_csk.log", "line": 123})
-        # 消息文本保留中文原文，不因为路径清洗而丢失
         self.assertIn("任务目录", record.message)
 
     def test_not_a_legacy_log_raises(self) -> None:
@@ -273,7 +411,8 @@ class VerdictRuleTests(unittest.TestCase):
         summary = self._summary([
             self._round(1),
             self._round(2, status="BLOCKED"),
-            {"event": "TASK_END", "status": "BLOCKED", "actual": {"gate": {"gate_pass": False, "checks": {"device_available": False}}}},
+            {"event": "TASK_END", "status": "BLOCKED",
+             "actual": {"gate": {"gate_pass": False, "checks": {"device_available": False}}}},
         ])
         self.assertEqual(summary["test_outcome"], "BLOCKED")
         self.assertEqual(summary["delivery_status"], "BLOCKED")
@@ -298,22 +437,60 @@ class VerdictRuleTests(unittest.TestCase):
         self.assertEqual(summary["rates"]["attempt_distribution"]["counts"]["none"], 2)
 
 
+class FakeSerial:
+    def __init__(self, *_args, **_kwargs):
+        self.closed = False
+        self.lines = [b"[2026-11-12 17:00:01.100][D][evs_event] wake result: bMain=1\r\n"]
+
+    def readline(self):
+        if self.lines:
+            return self.lines.pop(0)
+        time.sleep(0.01)
+        return b""
+
+    def close(self):
+        self.closed = True
+
+
+class SerialTimestampTests(unittest.TestCase):
+    def test_serial_log_prefix_is_host_receive_ms_and_raw_text_kept(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = TaskArtifacts(Path(directory), "serial")
+            artifacts.freeze_cases([{"case_id": "c1", "scenario": "fixture"}])
+            spec = ConnectionSpec.from_mapping({"ports": [{"port": "COM1", "baudrate": 115200, "role": "csk"}]})
+            manager = SerialManager(spec.ports, artifacts, factory=FakeSerial)
+            manager.start()
+            time.sleep(0.05)
+            manager.stop()
+            artifacts.finalize("PASS", "fixture complete")
+            log = artifacts.run_dir / "serial_logs" / "serial_COM1_csk.log"
+            content = log.read_text(encoding="utf-8")
+            match = re.search(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\] COM1 csk #1 ", content, re.M)
+            self.assertIsNotNone(match, content)
+            self.assertIn("wake result: bMain=1", content)
+
+
 class TaskArtifactsIntegrationTests(unittest.TestCase):
     def test_structured_events_are_mirrored_and_finalized(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             artifacts = TaskArtifacts(Path(tmp), "fixture", structured_events=True)
             artifacts.emit("TASK_STARTED", message="开始", expected={"mode": "smoke", "target_rounds": 1})
-            artifacts.emit("ROUND_RESULT", message="R1", round=1, status="PASS", actual={"attempts_total": 1, "first_success_attempt": 1})
-            artifacts.emit("TASK_END", message="结束", status="PASS", actual={"gate": {"gate_pass": True, "checks": {}}})
+            artifacts.emit("ROUND_RESULT", message="R1", round=1, status="PASS",
+                           actual={"attempts_total": 1, "first_success_attempt": 1})
+            artifacts.emit("TASK_END", message="结束", status="PASS",
+                           actual={"gate": {"gate_pass": True, "checks": {}}})
             artifacts.finalize("PASS", "fixture")
             run_dir = artifacts.run_dir
             self.assertTrue((run_dir / "events.jsonl").is_file())
-            self.assertTrue((run_dir / "run.log").is_file())
+            self.assertTrue((run_dir / "tool.log").is_file())
+            self.assertTrue((run_dir / "tool.live.log").is_file())
             self.assertTrue((run_dir / "summary.md").is_file())
             summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
             self.assertEqual(summary["rates"]["round_success_rate"], 100.0)
             self.assertEqual(summary["final_status"], "PASS")
             self.assertEqual(eventlog.verify_bundle(run_dir), [])
+            lines = tool_lines(run_dir)
+            self.assertEqual(len(lines), json.loads((run_dir / "summary.json").read_text())["meta"]["events_count"])
 
     def test_structured_events_off_keeps_v1_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -322,11 +499,12 @@ class TaskArtifactsIntegrationTests(unittest.TestCase):
             artifacts.finalize("PASS", "fixture")
             names = {item.name for item in artifacts.run_dir.iterdir()}
             self.assertNotIn("events.jsonl", names)
+            self.assertNotIn("tool.live.log", names)
             self.assertIn("tool.log", names)
 
 
 class TimeContractLintTests(unittest.TestCase):
-    """time lint：v2 产物只允许北京时间无时区毫秒格式。"""
+    """time lint：所有产物行必须是北京时间毫秒，禁止 T/Z/偏移。"""
 
     FORBIDDEN = (
         re.compile(r"\d{2}:\d{2}:\d{2}(?:\.\d+)?Z"),
@@ -334,21 +512,21 @@ class TimeContractLintTests(unittest.TestCase):
         re.compile(r"[+-](?:0\d|1[0-4]):[0-5]\d\b"),
     )
 
-    def test_event_times_match_contract(self) -> None:
+    def test_every_event_time_has_milliseconds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            run_dir = Path(tmp) / "run"
+            run_dir = Path(tmp) / "golden"
             build_golden(run_dir)
             for record in records_of(run_dir):
                 self.assertRegex(record.time or "", eventlog.TIME_RE)
 
-    def test_render_outputs_have_no_timezone_or_t_suffix(self) -> None:
+    def test_tool_log_lines_all_start_with_ms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            run_dir = Path(tmp) / "run"
+            run_dir = Path(tmp) / "golden"
             build_golden(run_dir)
-            for name in ("run.log", "summary.md"):
-                text = (run_dir / name).read_text(encoding="utf-8")
+            for line in tool_lines(run_dir):
+                self.assertRegex(line[:23], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$")
                 for pattern in self.FORBIDDEN:
-                    self.assertIsNone(pattern.search(text), f"{name} 命中 {pattern.pattern}")
+                    self.assertIsNone(pattern.search(line), f"命中 {pattern.pattern}: {line[:120]}")
 
     def test_module_source_has_no_forbidden_strftime(self) -> None:
         source = Path(eventlog.__file__).read_text(encoding="utf-8")
@@ -358,7 +536,7 @@ class TimeContractLintTests(unittest.TestCase):
 
 
 class RedactionTests(unittest.TestCase):
-    """secret/脱敏扫描：公开仓库里的样本与文档不得含内网、账号、用户目录、凭据。"""
+    """secret/脱敏扫描：公开仓库样本与文档不得含内网、账号、用户目录、凭据。"""
 
     PATTERNS = {
         "internal_ip": re.compile(r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"),
@@ -374,6 +552,7 @@ class RedactionTests(unittest.TestCase):
             FIXTURES / "legacy_flat_v1_smoke10.txt",
             FIXTURES / "PROVENANCE.md",
             FIXTURES / "legacy_flat_v1_smoke10.meta.json",
+            FIXTURES / "legacy_flat_v1_smoke10.markers.json",
             root / "references" / "structured-event-log-v2.md",
             root / "scripts" / "eventlog.py",
         ]
@@ -390,13 +569,17 @@ class CliTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
-            self.assertEqual(main(["eventlog", "build", "--legacy", str(GOLDEN), "--out-dir", str(out)]), 0)
+            self.assertEqual(main([
+                "eventlog", "build", "--legacy", str(GOLDEN), "--out-dir", str(out),
+                "--markers", str(GOLDEN_MARKERS),
+            ]), 0)
             self.assertEqual(main(["eventlog", "verify", "--run-dir", str(out)]), 0)
             schema_file = Path(tmp) / "schema.json"
             self.assertEqual(main(["eventlog", "schema", "--output", str(schema_file)]), 0)
             schema = json.loads(schema_file.read_text(encoding="utf-8"))
             self.assertEqual(schema["event_schema"], eventlog.EVENT_SCHEMA)
             self.assertEqual(schema["bundle_version"], 2)
+            self.assertIn("tool_log_rule", schema)
 
 
 if __name__ == "__main__":

@@ -360,7 +360,7 @@ class TaskArtifacts:
             self.run_dir = candidate
         (self.run_dir / "serial_logs").mkdir(parents=True, exist_ok=True)
         self.task_id = self.run_dir.name
-        self.tool_log_path = self.run_dir / "tool.log"
+        self.tool_log_path = self.run_dir / ("tool.live.log" if structured_events else "tool.log")
         self.results_path = self.run_dir / "results.csv"
         self.cases_path = self.run_dir / "cases.csv"
         self.stop = StopSupervisor(self.run_dir / "STOP")
