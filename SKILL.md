@@ -159,8 +159,11 @@ python -u lstest/scripts/lstest.py preflight --profile <project-profile.json>
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json> --device-snapshot <device-role-map.json>
 python -u lstest/scripts/lstest.py tts --text-file utterance.txt --voice 付小春 --output audio/sample.wav
 python -u lstest/scripts/lstest.py audio scan --direction Render --json
-python -u lstest/scripts/lstest.py eventlog build --legacy <旧平铺日志> --out-dir <新结果目录> --meta <任务上下文.json> --markers <设备marker表.json>
-python -u lstest/scripts/lstest.py eventlog verify --run-dir <结果目录> [--check-files]
+python -u lstest/scripts/lstest.py eventlog build --legacy <旧平铺日志> --out-dir <新结果目录> --meta <任务上下文.json> --markers <设备marker表.json> [--state-extension <状态扩展.json>]
+python -u lstest/scripts/lstest.py eventlog verify --run-dir <结果目录> [--check-files] [--state-extension <状态扩展.json>] [--strict-states]
+python -u lstest/scripts/lstest.py state list [--category wake] [--json]
+python -u lstest/scripts/lstest.py state check --extension <状态扩展.json>
+python -u lstest/scripts/lstest.py state coverage --inventory <状态盘点.json> [--extension <状态扩展.json>]
 ```
 
 详细合同和可复制的项目适配模板见：
@@ -171,6 +174,7 @@ python -u lstest/scripts/lstest.py eventlog verify --run-dir <结果目录> [--c
 - [references/scenario-api.md](references/scenario-api.md)
 - [references/result-log-standard.md](references/result-log-standard.md)
 - [references/structured-event-log-v2.md](references/structured-event-log-v2.md)
+- [references/state-catalog.md](references/state-catalog.md)
 - [references/node-integration.md](references/node-integration.md)
 - [references/project-adaptation-standard.md](references/project-adaptation-standard.md)
 - [references/acceptance.md](references/acceptance.md)

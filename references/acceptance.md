@@ -24,3 +24,32 @@
 19. `eventlog verify` 对 seq、时间格式、summary 重算、`tool.log` 重算与单行语法、gate 冲突、绝对路径、sha256 全部检查通过；`ToolLogValidator.validate_run` 能按 v1/v2 分流。
 20. 串口原始日志每行前缀为 host 接收毫秒时间，设备自身时钟保留在原文；`tool.log` 对应行可附 `device_ts`。
 21. 节点接入按 `references/node-integration.md` 五步完成：结构化运行产出四件套、`TASK_END` 写 gate、`eventlog verify --check-files` 为 `ERROR=0`；未完成前只能报 `NEEDS_REVIEW`，不得宣称真机验证。
+
+## 状态目录（v2 扩展）
+
+22. 设备状态码必须登记在通用目录（`scripts/states.py`）或 profile/`--state-extension` 的
+    `lstest.state-extension.v1` 扩展中；未登记码落 `DEVICE_UNPARSED`（WARN），
+    `details.raw_code`、`raw_sha256`、证据定位齐全，不静默渲染成正式状态。
+23. 项目扩展只能新增 `P_` 前缀码或显式别名；覆盖通用码、别名指向未登记码、
+    `profile_id` 不一致均拒绝加载（`BLOCKED_PROFILE_CONTRACT`，退出码 2）。
+    原始 marker 文本与捕获值不被改写，语义码与 `raw_code` 分离。
+24. `state_report` 由事件确定性生成：按类别计数、目录状态（common/project/unregistered）、
+    重复合并数、迟到、前置缺失、blocking/recovered/unrecovered、必需状态；
+    `summary.json`/`summary.md`/`tool.log` 与之一致，手改会被 `verify` 判漂移。
+25. profile 声明 `state_catalog.gate` 后，`required_states_present` 与
+    `no_unrecovered_blocking` 进入 gate；任一为 false → `delivery_status=BLOCKED`、
+    `final_status` 不得为 `PASS`。只有 `pass_role=positive_evidence` 可作通过证据。
+26. 旧 v1/v2 目录在没有扩展时行为不变；`verify` 的 `STATE_*` 检查默认 WARN，
+    `--strict-states` 提升为 ERROR；`state list/check/coverage` 可独立运行且不访问设备/网络。
+27. 总目录包含用户给定的 7 个基础 marker 对应语义状态（`WAKE_KEYWORD`、`WAKE_TTS_CALLBACK`、
+    `ASR_KEYWORD`、`TTS_PLAY_ID`、`ONLINE_ASR_TEXT`、`ONLINE_TTS_TEXT`、`ONLINE_SKILL_TEXT`），
+    并覆盖 TTS/播放/在线请求/重启/版本/Wi-Fi/蓝牙/联网/音频链路/业务/解析等类别。
+28. 设备行统一显示"类别：业务值"：不出现 `raw_marker=`、正则名、rule id、捕获字段名、
+    `catalog_status=`、`raw_code=`、`correlation_id=`、`device_ts=`；业务值（keyword/zh/text/
+    tts_id/addr/request_id）按脱敏规则保留；raw 原文只在 evidence。
+29. `tts` 类的 request/start/first_packet/end/complete/interrupt/pause/resume/error/play
+    阶段均可独立成行且同属 tts 类；播放类覆盖 prepare/play/pause/resume/interrupt/stop/play_end/error。
+30. 至少两个 profile 验证：A 只有部分 marker（离线），B 另一套 marker（在线）；
+    A 不输出 online_asr/online_tts/online_skill，不补假状态；B 正常输出；两者 verify ERROR=0。
+31. `state profile-coverage` 区分 `SUPPORTED`/`EMITTED`/`NOT_EMITTED`/`NOT_APPLICABLE`/`UNPARSED`；
+    未登记 marker 进 `UNPARSED`，tool.log 只显示一行"未识别设备状态"。

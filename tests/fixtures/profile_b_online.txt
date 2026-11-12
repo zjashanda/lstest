@@ -1,0 +1,9 @@
+time: 2026-11-12 10:00:00.000
+level: INFO
+event: TASK_START
+task_id: profile-b-online
+round: -
+status: PASS
+raw: {"wake_tts_raw": "[2026-01-01 00:00:01.000][S] wakeup_tts_callback, tts: 1", "online_asr_raw": "[2026-01-01 00:00:01.200][S] online_asr_callbak, text: da3 kai1 kong1 tiao2", "online_tts_raw": "[2026-01-01 00:00:01.400][S] online_asr_tts_callbak, tts: 2", "online_skill_raw": "[2026-01-01 00:00:01.600][S] online_skill_callbak, text: open_ac"}
+message: 项目 B 原始日志（在线能力）
+details: {"profile_id": "profile-b-online"}

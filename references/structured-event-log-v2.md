@@ -109,12 +109,18 @@ result/<timestamp>_<task>/
 
 ### DEVICE 事件
 
-设备状态既可由适配器直接提交，也可由项目 marker 表从 raw 派生（见 §9）。统一约定：
+设备状态码由 [state-catalog.md](state-catalog.md) 登记：通用目录 + 项目
+`lstest.state-extension.v1` 扩展。统一约定：
 
-- `source="device"`，`details.device=true`，`details.audit_category` 取 `PDU/WAKE/PLAYER/REC/TTS/ASR/NET/DEVICE`，
+- `source="device"`，`details.device=true`，`details.audit_category` 取
+  `PDU/WAKE/PLAYER/REC/TTS/ASR/NET/DEVICE`，
   `details.audit_kind=STATE`（或 START/END）。
 - `details.state` 写状态转换，如 `ON→OFF`、`IDLE→PLAYING`。
 - 设备自身时钟放进 `details.device_ts`，**不得**用它替代 host 时间；host 时间来自实际接收/动作窗口。
+- **状态码必须登记**：未登记的 marker/适配器码落 `DEVICE_UNPARSED`（`level=WARN`），
+  原始码保存在 `details.raw_code`，原始行摘要与 `details.raw_sha256` 一并保留。
+- 项目只能新增 `P_` 前缀码或显式别名（`raw_code → maps_to`）；不得覆盖通用码，
+  不得改写原始 marker 文本。
 - 未识别但可能重要的设备行不得静默丢弃：写 `DEVICE_UNPARSED`，带 `details.raw_sha256` 与
   `details.raw_excerpt`，并保留证据定位。
 - 连续重复的同一状态合并为一条事件，`details.repeat_count` 记次数、`details.last_hit` 记最后一次；
@@ -133,10 +139,16 @@ result/<timestamp>_<task>/
 
 - `范围`：`TASK` 或 `R01`、`R01/A02`。
 - `动作`：TOOL 事件用 `RUN`/`ENV`/`SERIAL`/`PDU`/`WAKE`/`REC`/`PLAYER`/`TTS`/`ASR`/`NET`/`RESULT`；
-  **DEVICE 事件固定用 `DEVICE`，第三段写设备状态码**（`BOOT_START`/`READY`/`WAKEUP`/`ASR_RESULT`/`TTS_END`/`PLAYER_START`/`VAD_END`…）。
-- `阶段/结果`：`START`/`END`/`STATE`/`JUDGE`/`RETRY`/`TIMEOUT`/`PASS`/`FAIL`/`NO_WAKE`/`BLOCKED`。
+  **DEVICE 事件固定用 `DEVICE`，后面直接写统一显示类别**（唤醒/asr/online_asr/tts/播放/电源/启动…），
+  不写状态码、raw marker、rule id 或内部解析 ID。
+- `阶段/结果`：TOOL 事件用 `START`/`END`/`STATE`/`JUDGE`/`RETRY`/`TIMEOUT`/`PASS`/`FAIL`/`NO_WAKE`/`BLOCKED`。
 - 第四段 `<结果>` 只在 `JUDGE`/`END` 等需要区分判断时出现，例如 `[R01/A01][WAKE][NO_WAKE]`、
   `[TASK][RUN][END][NEEDS_REVIEW]`。
+- 统一设备行示例（详见 [state-catalog.md](state-catalog.md) §2.2）：
+  `[R01/A02][DEVICE] 唤醒：keyword=hai1 xin4 xiao3 ju4，zh:海信小聚`、
+  `[R01/A02][DEVICE] tts：tts_id=1，addr=//1.pcm，play`、`[R01][DEVICE] 电源：断电`。
+- 旧目录（摘要 `meta.display_format` 缺失）按旧的 `[DEVICE][状态码]` 渲染，`verify` 仍可通过；
+  新目录默认统一显示。
 
 真实样例（脱敏后）：
 
@@ -162,7 +174,9 @@ result/<timestamp>_<task>/
 6. **不写汇总段落**：`tool.log` 不允许 header/footer/空行；结论看 `summary.md`，
    但 `TASK_END` 行必须同时给出 `recorded`、`test_outcome`、`delivery`、`final`、`gate`。
 7. **不丢状态**：设备状态、错误、恢复必须出现；未识别行以 `DEVICE_UNPARSED` 出现。
-8. **可去重**：连续重复的 DEVICE 状态合并一行，带 `repeat=` 与 `last_hit=`；TOOL 动作不去重。
+8. **可去重**：连续重复的 DEVICE 状态合并一行，统一显示格式带 `（repeat=N）`；TOOL 动作不去重。
+9. **不泄露内部解析信息**：设备行不得出现 `raw_marker=`、`catalog_status=`、`raw_code=`、
+   `rule=`、`correlation_id=`、`device_ts=`、`event_seq=`；这些只存在于 `events.jsonl`/`raw/`。
 
 ### 应覆盖的设备状态类别
 
@@ -174,7 +188,8 @@ TTS（REQUEST/START/FIRST_PACKET/END/ERROR、voice/model、在线或本地）、
 PAUSE/RESUME/STOP/COMPLETE/ERROR、source、音量）、录音/VAD（RECORD_START/STOP、VAD_START/END、
 参数、丢帧/溢出）、业务（命令、intent、执行回报、失败码）、资源异常（越阈值、ERROR/WARN/恢复）。
 
-具体 profile 可扩展类别，但必须映射到上述通用类别并写入 `details.audit_category`。
+以上是类别要求，**具体状态码以 [state-catalog.md](state-catalog.md) 的登记清单为准**；
+本表没有、目录也没有的码，按未登记处理（`DEVICE_UNPARSED` + `raw_code`）。
 
 ## 5. summary.json / summary.md
 
@@ -218,6 +233,10 @@ PAUSE/RESUME/STOP/COMPLETE/ERROR、source、音量）、录音/VAD（RECORD_STAR
 - 前置条件类（`prerequisites_met`、`infrastructure_ready`、`device_available`、
   `input_present`、`profile_contract_met`）为 false → `BLOCKED`。
 - 没有 gate：`delivery_status=UNKNOWN`，`final_status=NEEDS_REVIEW`。**没有 gate 不得签发 PASS。**
+- 状态 gate（profile 声明 `state_catalog.gate` 时追加）：
+  - `required_states_present=false` → 前置/证据不满足 → `BLOCKED`；
+  - `no_unrecovered_blocking=false` → 阻断状态未恢复 → `BLOCKED`；
+  - 只有 `pass_role=positive_evidence` 的状态可作为 `required_states` 的通过证据。
 
 ## 7. 责任层与趋势
 
@@ -248,6 +267,11 @@ python -m lstest.scripts.lstest eventlog verify --run-dir <dir> [--check-files] 
 | `SECRET` | ERROR | 疑似凭据值 |
 | `MISSING_RAW` / `RAW_SHA` | ERROR | raw 引用丢失或哈希不符 |
 | `SOURCE_STATUS_CONFLICT` | WARN | 源日志自身状态冲突（已按 gate 处理） |
+| `STATE_UNREGISTERED` | WARN/ERROR | 设备状态码未登记（`--strict-states` 时为 ERROR） |
+| `STATE_UNRECOVERED` | WARN/ERROR | blocking 状态在窗口内未恢复（`--strict-states` 时为 ERROR） |
+| `STATE_LATE` | WARN | `device_ts` 早于上一条设备事件 |
+| `STATE_PREREQUISITE` | WARN | 缺前置状态（仅 `gate.strict_prerequisites=true` 时报告） |
+| `STATE_GATE` | WARN | 状态 gate 检查未通过 |
 | `MISSING_EVIDENCE` / `EVIDENCE_SHA` | WARN/ERROR | 证据文件缺失/哈希不符（`--check-files`） |
 | `UNKNOWN_EVENT` / `LEGACY_WARNING` | WARN | 旧日志缺字段或未知字段 |
 
@@ -269,6 +293,12 @@ python -m lstest.scripts.lstest eventlog verify --run-dir <dir> [--check-files] 
    `source` 指向事件 raw 字段，`pattern` 用命名捕获组（自动成为 tool.log 的 k=v），
    `host_from` 选择 host 时间基准（`play_start`/`play_end`/`power_on`/`power_on_minus_off`/`record`），
    `state` 写状态转换。示例见 `tests/fixtures/legacy_flat_v1_smoke10.markers.json`。
+   marker 的 `code` 必须已在 [state-catalog.md](state-catalog.md) 或 `--state-extension`
+   中登记；未登记码降级为 `DEVICE_UNPARSED`，原始码保留在 `details.raw_code`。
+   项目私有状态用 `P_` 前缀在扩展中声明；把通用码改义属于违约（加载即拒绝）。
+4. 项目状态扩展：`--state-extension <扩展.json>`（`lstest.state-extension.v1`），
+   或在 profile 的 `state_catalog` 字段内联声明。`eventlog build/render/verify` 必须使用
+   同一份扩展，否则 `summary`/`tool.log` 重算会判漂移。
 4. 旧日志的 `raw.node/user/python/platform/cwd` 会提升到 `details.environment`（raw 原文仍外置保留）。
 5. 项目新代码：通过 `EventLogWriter` 或 `TaskArtifacts(structured_events=True)` 写事件；
    设备行用 `write_device_event()` 提交（未识别时自动记 `DEVICE_UNPARSED`）；

@@ -158,15 +158,40 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--meta", type=Path, default=None, help="任务上下文 JSON（title/purpose/scope/inputs 等）")
     build.add_argument("--markers", type=Path, default=None, help="设备 marker 表 JSON；提供后从 raw 派生 DEVICE 状态事件")
     build.add_argument("--raw-min-bytes", type=int, default=0, help="raw 外置阈值；0 表示全部外置")
+    build.add_argument("--state-extension", type=Path, default=None,
+                       help="项目状态扩展 JSON（lstest.state-extension.v1），用于登记 P_ 码与别名")
     render = eventlog_sub.add_parser("render", help="从已有 events.jsonl 重新生成 run.log / summary.md / summary.json")
     render.add_argument("--run-dir", type=Path, required=True)
     render.add_argument("--meta", type=Path, default=None)
+    render.add_argument("--state-extension", type=Path, default=None)
     verify = eventlog_sub.add_parser("verify", help="校验 v2 目录：schema、序号、重算一致、判定冲突、路径泄漏")
     verify.add_argument("--run-dir", type=Path, required=True)
     verify.add_argument("--check-files", action="store_true", help="同时校验证据文件存在与 SHA-256")
+    verify.add_argument("--state-extension", type=Path, default=None)
+    verify.add_argument("--strict-states", action="store_true",
+                        help="未登记状态/未恢复阻断提升为 ERROR（默认 WARN）")
     verify.add_argument("--json", action="store_true")
     schema_cmd = eventlog_sub.add_parser("schema", help="输出 v2 事件/摘要 schema 自描述")
     schema_cmd.add_argument("--output", type=Path, default=None)
+
+    state_cmd = sub.add_parser("state", help="设备状态目录：列目录、校验项目扩展、生成覆盖率")
+    state_sub = state_cmd.add_subparsers(dest="state_command", required=True)
+    state_list = state_sub.add_parser("list", help="列出通用状态目录")
+    state_list.add_argument("--category", default=None)
+    state_list.add_argument("--json", action="store_true")
+    state_check = state_sub.add_parser("check", help="校验项目状态扩展")
+    state_check.add_argument("--extension", type=Path, required=True)
+    state_cov = state_sub.add_parser("coverage", help="对比盘点与目录，输出覆盖率")
+    state_cov.add_argument("--inventory", type=Path, required=True)
+    state_cov.add_argument("--extension", type=Path, default=None)
+    state_cov.add_argument("--output", type=Path, default=None)
+    state_cov.add_argument("--json", action="store_true")
+    state_pcov = state_sub.add_parser("profile-coverage", help="按 profile 输出 5 类状态覆盖")
+    state_pcov.add_argument("--extension", type=Path, default=None)
+    state_pcov.add_argument("--events", type=Path, default=None)
+    state_pcov.add_argument("--observed", default="")
+    state_pcov.add_argument("--unparsed", default="")
+    state_pcov.add_argument("--output", type=Path, default=None)
 
     pre = sub.add_parser("preflight", help="只检查 profile 和输入，不打开硬件")
     pre.add_argument("--profile", type=Path, required=True)
@@ -211,17 +236,28 @@ def run_eventlog_command(args: argparse.Namespace) -> int:
         import eventlog  # type: ignore
 
     meta = load_meta(getattr(args, "meta", None))
+    extension = None
+    if getattr(args, "state_extension", None) is not None:
+        try:
+            from . import states as state_catalog
+        except ImportError:  # pragma: no cover - 直接执行回退
+            import states as state_catalog  # type: ignore
+        extension = state_catalog.validate_extension(args.state_extension)
     if args.eventlog_command == "build":
         summary = eventlog.import_legacy_log(
             args.legacy, args.out_dir, task_id=args.task_id,
             raw_min_bytes=args.raw_min_bytes, meta=meta,
             markers=getattr(args, "markers", None),
+            extension=extension,
         )
     elif args.eventlog_command == "render":
         records = eventlog.read_events(args.run_dir / "events.jsonl")
-        summary = eventlog.write_bundle(records, args.run_dir, meta=meta)
+        summary = eventlog.write_bundle(records, args.run_dir, meta=meta, extension=extension)
     elif args.eventlog_command == "verify":
-        findings = eventlog.verify_bundle(args.run_dir, check_files=args.check_files)
+        findings = eventlog.verify_bundle(
+            args.run_dir, check_files=args.check_files,
+            extension=extension, strict_states=args.strict_states,
+        )
         errors = [item for item in findings if item["level"] == "ERROR"]
         if args.json:
             print(json.dumps({"status": "FAIL" if errors else "PASS", "findings": findings}, ensure_ascii=False, indent=2))
@@ -295,6 +331,38 @@ def run_audio_tool(args: argparse.Namespace) -> int:
     return completed.returncode
 
 
+def run_state_command(args: argparse.Namespace) -> int:
+    """设备状态目录：只读，不打开设备、不访问网络。"""
+    try:
+        from . import states as state_catalog
+    except ImportError:  # pragma: no cover - 直接执行回退
+        import states as state_catalog  # type: ignore
+    if args.state_command == "list":
+        return state_catalog.main(["list", *(["--category", args.category] if args.category else []),
+                                   *(["--json"] if args.json else [])])
+    if args.state_command == "check":
+        return state_catalog.main(["check", "--extension", str(args.extension)])
+    if args.state_command == "profile-coverage":
+        command = ["profile-coverage"]
+        if args.extension:
+            command += ["--extension", str(args.extension)]
+        if args.events:
+            command += ["--events", str(args.events)]
+        if args.observed:
+            command += ["--observed", args.observed]
+        if args.unparsed:
+            command += ["--unparsed", args.unparsed]
+        if args.output:
+            command += ["--output", str(args.output)]
+        return state_catalog.main(command)
+    return state_catalog.main([
+        "coverage", "--inventory", str(args.inventory),
+        *(["--extension", str(args.extension)] if args.extension else []),
+        *(["--output", str(args.output)] if args.output else []),
+        *(["--json"] if args.json else []),
+    ])
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if args.command == "list":
@@ -304,6 +372,7 @@ def main(argv: list[str] | None = None) -> int:
                 "dynamic-serial", "profile", "evidence", "basic-smoke", "safe-stop",
                 "indextts-tts", "audio-device-scan", "laid-installer", "device-key-playback",
                 "structured-event-log-v2",
+                "state-catalog",
             ],
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2) if args.json else "\n".join(payload["capabilities"]))
@@ -311,6 +380,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "eventlog":
             return run_eventlog_command(args)
+        if args.command == "state":
+            return run_state_command(args)
         if args.command == "tts":
             text = args.text
             if args.text_file is not None:

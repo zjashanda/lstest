@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 
 try:
-    from .eventlog import EventLogWriter
+    from .eventlog import EventLogWriter, write_device_event
     from .observations import RawTag, ToolJudgement, raw_tags_from_mappings, render_observation
     from .timeline import TimelineLedger, ToolLogValidator, safe_basename
 except ImportError:  # direct execution fallback
-    from eventlog import EventLogWriter
+    from eventlog import EventLogWriter, write_device_event
     from observations import RawTag, ToolJudgement, raw_tags_from_mappings, render_observation
     from timeline import TimelineLedger, ToolLogValidator, safe_basename
 
@@ -356,6 +356,7 @@ class TaskArtifacts:
         run_name: str | None = None,
         append: bool = False,
         structured_events: bool = False,
+        state_extension: Any | None = None,
     ):
         if run_name:
             self.run_dir = Path(result_root) / run_name
@@ -380,6 +381,7 @@ class TaskArtifacts:
         self.event_log = (
             EventLogWriter(self.run_dir, self.task_id, fsync=False) if structured_events else None
         )
+        self.state_extension = state_extension
         self._event_log_failed = False
         self.structured_summary: dict[str, Any] | None = None
         self._tool = self.tool_log_path.open("a", encoding="utf-8")
@@ -1529,6 +1531,17 @@ class TaskArtifacts:
             "success_rate": round((passed / valid) * 100, 4) if valid else None,
         }
 
+    def write_device_event(self, line: str, **kwargs: Any) -> dict[str, Any]:
+        """设备状态写入口：先按状态目录/profile 扩展解析，未登记落 DEVICE_UNPARSED。
+
+        只在 ``structured_events=True`` 时可用；``state_extension`` 随 TaskArtifacts
+        构造参数传入，避免适配器各自加载目录。
+        """
+        if self.event_log is None:
+            raise RuntimeError("write_device_event 需要 structured_events=True")
+        kwargs.setdefault("extension", self.state_extension)
+        return write_device_event(self.event_log, line, **kwargs)
+
     def finalize(self, status: str, reason: str) -> dict[str, Any]:
         if self.closed:
             return dict(self._final_summary or {"status": status, "reason": reason})
@@ -1587,7 +1600,7 @@ class TaskArtifacts:
                     "title": self.task_id,
                     "purpose": None,
                     "scope": None,
-                })
+                }, extension=self.state_extension)
             except (OSError, ValueError) as error:  # 结构化摘要失败不得改变测试结论
                 self.add_sticky("TOOL_EXCEPTION", f"结构化摘要生成失败: {error}", resource="summary.json")
         for handle in (self._tool, self._csv, self._cases):

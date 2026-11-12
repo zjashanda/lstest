@@ -1,0 +1,9 @@
+{
+  "schema": "lstest.state-extension.v1",
+  "profile_id": "profile-a-offline",
+  "enabled_markers": ["wakeupkw", "asrkw", "ttskw"],
+  "not_applicable": ["online_asr", "online_tts", "online_skill", "online_request"],
+  "states": [],
+  "aliases": [],
+  "gate": {"required_states": ["WAKE_KEYWORD", "ASR_KEYWORD"], "max_unrecovered_blocking": 0}
+}

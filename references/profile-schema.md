@@ -29,6 +29,41 @@
 
 正式准入会验证命名捕获、唯一展示捕获、来源、阶段、关联、镜像、空值、正反 fixture 和安全停止 fixture；任一缺失即 `BLOCKED_PROFILE_CONTRACT`。
 
+## 状态目录扩展（`state_catalog`）
+
+profile 可声明项目私有的设备状态码与别名，格式是 `lstest.state-extension.v1`：
+
+```json
+{
+  "profile_id": "<project-profile-id>",
+  "state_catalog": {
+    "states": [{
+      "code": "P_TCL_SETLOGLEV_OK",
+      "category": "mode",
+      "kind": "device",
+      "label_zh": "日志级别设置成功",
+      "pass_role": "diagnostic",
+      "duplicate_policy": "merge"
+    }],
+    "aliases": [{"raw_code": "WAKE_WORD_HIT", "maps_to": "WAKEUP"}],
+    "enabled_markers": ["wakeupkw", "asrkw"],
+    "not_applicable": ["online_asr", "online_tts"],
+    "gate": {"required_states": ["READY", "WAKEUP"], "max_unrecovered_blocking": 0}
+  }
+}
+```
+
+规则：
+
+- `code` 必须是 `P_` 前缀；不得覆盖通用状态；`profile_id` 由 profile 自动补齐且必须一致。
+- `aliases` 只翻译语义码，原始 marker 文本仍保留在 `details.parameters`/`details.raw_code`。
+- `enabled_markers` 只列本项目真实出现的 marker；项目没有的能力写入 `not_applicable`，
+  coverage 标 `NOT_APPLICABLE`，不得补假状态。
+- marker 可声明 `display`（category/stage/primary/fields），tool.log 只按声明显示业务值。
+- 未在通用目录或本扩展登记的码 → `DEVICE_UNPARSED`；正式准入时扩展非法即
+  `BLOCKED_PROFILE_CONTRACT`（退出码 2）。
+- 状态语义、PASS gate 与时序规则见 [state-catalog.md](state-catalog.md)。
+
 ## ports 与 `--device-snapshot`
 
 `ports` 是 `{port, role, baudrate, capabilities}` 数组，role 是 profile 内唯一的端口身份。端口号可以写死用于历史项目，但这不是推荐做法：设备事实的唯一来源是 `device-io`。

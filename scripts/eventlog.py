@@ -27,6 +27,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+try:  # 包内导入；直接执行 scripts/*.py 时退化为同目录导入
+    from . import states as state_catalog
+except ImportError:  # pragma: no cover - 直接执行回退
+    import states as state_catalog  # type: ignore
+
 BEIJING = timezone(timedelta(hours=8))
 
 EVENT_SCHEMA = "lstest.event.v2"
@@ -64,6 +69,8 @@ ARTIFACT_GATE_CHECKS = {
 BLOCKING_GATE_CHECKS = {
     "prerequisites_met", "infrastructure_ready", "device_available",
     "input_present", "profile_contract_met",
+    # 状态目录 gate：声明的必需状态缺失、或阻断状态未恢复，都不得签发 PASS。
+    "required_states_present", "no_unrecovered_blocking",
 }
 
 TIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$")
@@ -538,11 +545,13 @@ class EventLogWriter:
             self._closed = True
             self._handle.close()
 
-    def finalize(self, meta: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    def finalize(self, meta: Mapping[str, Any] | None = None,
+                 extension: "state_catalog.StateExtension | None" = None) -> dict[str, Any]:
         """关闭写入并生成三层产物，返回 summary.json 内容。"""
         self.close()
         records = read_events(self.events_path)
-        return write_bundle(records, self.run_dir, meta=meta, events_path=self.events_path)
+        return write_bundle(records, self.run_dir, meta=meta, events_path=self.events_path,
+                            extension=extension)
 
 
 def write_event_records(records: Sequence[EventRecord], path: Path) -> int:
@@ -614,6 +623,7 @@ def import_legacy_log(
     raw_min_bytes: int = 0,
     meta: Mapping[str, Any] | None = None,
     markers: Mapping[str, Any] | str | Path | None = None,
+    extension: "state_catalog.StateExtension | None" = None,
 ) -> dict[str, Any]:
     """旧平铺块日志 → v2 三层产物；不改动源文件，不联网。
 
@@ -638,6 +648,7 @@ def import_legacy_log(
             round_power_on.setdefault(record.round, power_on)
     device_events = derive_device_events(
         records, device_markers, device_ts_pattern=ts_pattern, round_power_on=round_power_on,
+        extension=extension,
     )
     records = _sort_records(records + device_events)
     writer = EventLogWriter(out_dir, task)
@@ -650,7 +661,8 @@ def import_legacy_log(
             writer.emit(record.event, **{key: value for key, value in payload.items() if key != "event"})
     finally:
         writer.close()
-    summary = writer.finalize(meta=_merge_meta(meta, source=source, import_warnings=warnings))
+    summary = writer.finalize(meta=_merge_meta(meta, source=source, import_warnings=warnings),
+                              extension=extension)
     return summary
 
 
@@ -1198,8 +1210,9 @@ def _evidence_index(records: Sequence[EventRecord]) -> list[dict[str, Any]]:
     return sorted(index, key=lambda item: (item["first_event_seq"] or 0, item["path"]))
 
 
-def summarize(records: Sequence[EventRecord], meta: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """从事件确定性生成 summary.json 内容。除 ``meta`` 外不读任何外部状态。"""
+def summarize(records: Sequence[EventRecord], meta: Mapping[str, Any] | None = None,
+              extension: "state_catalog.StateExtension | None" = None) -> dict[str, Any]:
+    """从事件确定性生成 summary.json 内容。除 ``meta``/状态扩展外不读任何外部状态。"""
     records = list(records)
     meta = dict(meta or {})
     start = next((record for record in records if record.event in {"TASK_START", "TASK_STARTED"}), None)
@@ -1208,6 +1221,17 @@ def summarize(records: Sequence[EventRecord], meta: Mapping[str, Any] | None = N
     target = _target_rounds(records)
     milestone = _milestone(records)
     gate = _gate(records)
+    state_report = state_catalog.analyze(records, extension)
+    # 状态 gate 只在 profile 声明了必需状态/容忍度时生效；未声明时保持旧行为。
+    if state_report["gate_checks"]:
+        checks = dict((gate or {}).get("checks") or {})
+        checks.update(state_report["gate_checks"])
+        merged = dict(gate or {})
+        merged["checks"] = dict(sorted(checks.items()))
+        merged["failed_checks"] = sorted(key for key, value in checks.items() if value is False)
+        merged["gate_pass"] = not merged["failed_checks"]
+        merged.setdefault("source_event", "STATE_CATALOG")
+        gate = merged
     anomalies = _anomalies(records, rounds)
     latency = _latency(records, rounds)
     outcome, outcome_basis = _test_outcome(rounds, target, end)
@@ -1287,6 +1311,7 @@ def summarize(records: Sequence[EventRecord], meta: Mapping[str, Any] | None = N
         "generated_at": now_human(),
         "generator": "lstest/scripts/eventlog.py",
         "bundle_version": BUNDLE_VERSION,
+        "display_format": "unified",
         "task_id": task_id,
         "title": meta.get("title") or (start.message if start else None) or task_id,
         "purpose": meta.get("purpose"),
@@ -1339,6 +1364,7 @@ def summarize(records: Sequence[EventRecord], meta: Mapping[str, Any] | None = N
         "worst_round": worst,
         "responsibility": responsibility,
         "gate": gate,
+        "state_report": state_report,
         "missing": missing,
         "next_steps": _next_steps(outcome, delivery, gate, rounds, target, rates),
         **context,
@@ -1375,8 +1401,8 @@ TOOL_LOG_KINDS = {
 }
 TOOL_LOG_LINE_RE = re.compile(
     r"^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) "
-    r"\[(?P<scope>[^\]\n]+)\]\[(?P<category>[A-Z_]+)\]\[(?P<kind>[A-Z_]+)\]"
-    r"(?:\[(?P<result>[A-Z_]+)\])? (?P<body>.+)$"
+    r"\[(?P<scope>[^\]\n]+)\]\[(?P<category>[A-Z_]+)\]"
+    r"(?:\[(?P<kind>[A-Z_]+)\])?(?:\[(?P<result>[A-Z_]+)\])? (?P<body>.+)$"
 )
 CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 AUDIT_CATEGORY_RULES = (
@@ -1588,7 +1614,8 @@ def _audit_evidence(record: EventRecord) -> str:
     return ",".join(refs[:4])
 
 
-def _audit_facts(record: EventRecord, summary: Mapping[str, Any], *, since_prev: float | None) -> list[str]:
+def _audit_facts(record: EventRecord, summary: Mapping[str, Any], *, since_prev: float | None,
+                 unified: bool = False) -> list[str]:
     """按“做法/状态/判断/产物/证据”顺序组装单行事实，缺失项不输出。"""
     facts: list[str] = []
     seen: dict[str, str] = {}
@@ -1633,7 +1660,7 @@ def _audit_facts(record: EventRecord, summary: Mapping[str, Any], *, since_prev:
         add("action", record.action_id)
     if record.broadcast_id and record.broadcast_id != record.action_id:
         add("broadcast", record.broadcast_id)
-    if is_device and record.correlation_id:
+    if is_device and record.correlation_id and not unified:
         add("corr", record.correlation_id, 60)
 
     parameters = details.get("parameters")
@@ -1644,7 +1671,8 @@ def _audit_facts(record: EventRecord, summary: Mapping[str, Any], *, since_prev:
         "device", "audit_category", "audit_kind", "marker", "repeat_count", "last_hit",
         "source_event", "source_event_seq", "unparsed", "legacy_fields", "parameters",
         "raw_excerpt", "raw_sha256", "environment", "lstest_ref_sha256", "audit_before",
-        "audit_after", "state",
+        "audit_after", "state", "catalog_status", "raw_code", "display", "raw_marker",
+        "rule_id",
     }
     for key, value in details.items():
         if str(key) in internal or str(key).startswith("audit_"):
@@ -1698,7 +1726,7 @@ def _audit_facts(record: EventRecord, summary: Mapping[str, Any], *, since_prev:
         hits = _audit_hits(record)
         if hits:
             add("hit", hits, 80)
-    if record.rule_id:
+    if record.rule_id and not unified:
         add("rule", record.rule_id, 60)
     if record.reason:
         add("reason", record.reason, 80)
@@ -1722,12 +1750,59 @@ def _audit_facts(record: EventRecord, summary: Mapping[str, Any], *, since_prev:
     return facts
 
 
-def _audit_line(record: EventRecord, summary: Mapping[str, Any], *, since_prev: float | None = None) -> str:
+def _device_audit_line(record: EventRecord, scope: str, stamp: str) -> str:
+    """统一设备行：`[范围][DEVICE] 类别：业务值`。
+
+    只显示归一化状态类别和业务值；不显示 raw_marker、正则名、rule id、捕获字段名、
+    内部解析 ID、device_ts 或 catalog_status。raw 原文与证据留在 events.jsonl/raw。
+    """
+    details = record.details if isinstance(record.details, Mapping) else {}
+    if details.get("unparsed"):
+        excerpt = _clip(one_line(details.get("raw_excerpt") or record.message or ""), 120)
+        return f"{stamp} [{scope}][DEVICE] 未识别设备状态：{excerpt}".rstrip()
+    code = record.event.upper()
+    state, _status = (state_catalog.CATALOG.get(code), "")
+    if state is None:
+        state = state_catalog.CATALOG[state_catalog.UNPARSED_CODE]
+    parameters = details.get("parameters")
+    display = details.get("display") if isinstance(details.get("display"), Mapping) else None
+    described = state_catalog.describe_device(code, parameters, display)
+    category = described["category"]
+    primary = described["primary"]
+    stage = described["stage"]
+    fields = described["fields"]
+    parts = []
+    if primary:
+        body = f"{category}：{primary}"
+        if fields:
+            parts = [f"{label}:{value}" if label in {"zh", "中文"} else f"{label}={value}"
+                     for label, value in fields]
+    elif fields:
+        body = f"{category}："
+        parts = [f"{label}:{value}" if label in {"zh", "中文"} else f"{label}={value}"
+                 for label, value in fields]
+    elif stage:
+        body = f"{category}：{stage}"
+    else:
+        label = one_line(str((display or {}).get("label") or state.label_zh or category))
+        body = f"{category}：{label}"
+    if parts:
+        body += "，".join(parts)
+    if stage and (primary or fields):
+        body += f"，{stage}"
+    return f"{stamp} [{scope}][DEVICE] {body}".rstrip()
+
+
+def _audit_line(record: EventRecord, summary: Mapping[str, Any], *, since_prev: float | None = None,
+                display_format: str = "unified") -> str:
     scope = _audit_scope(record)
     category = _audit_category(record)
     kind = _audit_kind(record)
     status = (record.status or "").upper().replace("NO_WAKEUP", "NO_WAKE")
     stamp = ensure_ms(record.time) or "1970-01-01 00:00:00.000"
+    details = record.details if isinstance(record.details, Mapping) else {}
+    if display_format == "unified" and details.get("device"):
+        return _device_audit_line(record, scope, stamp)
 
     if record.event in {"TASK_END", "TASK_FINISHED"}:
         # 收尾行必须同时给出动作结果、测试结果、交付状态与最终判定，避免再次出现
@@ -1761,7 +1836,8 @@ def _audit_line(record: EventRecord, summary: Mapping[str, Any], *, since_prev: 
     if status and status != kind and kind in {"JUDGE", "END", "EVENT"}:
         tokens += f"[{status}]"
     message = one_line(record.message) or EVENT_MESSAGES.get(record.event) or one_line(record.event)
-    facts = _audit_facts(record, summary, since_prev=since_prev)
+    facts = _audit_facts(record, summary, since_prev=since_prev,
+                         unified=display_format == "unified")
     body = message
     if facts:
         body += (" | " if body else "") + " | ".join(facts)
@@ -1779,24 +1855,40 @@ def validate_tool_log_text(text: str) -> list[str]:
         if not match:
             errors.append(f"第 {number} 行不是单行时序格式（需 ms 时间戳 + [范围][动作][阶段]）")
             continue
-        kind = match.group("kind")
+        kind = match.group("kind") or ""
+        body = match.group("body")
         is_device = match.group("category") == "DEVICE"
         if is_device:
-            if not re.fullmatch(r"[A-Z][A-Z0-9_]*", kind):
-                errors.append(f"第 {number} 行设备状态码不合法: {kind}")
+            # 新格式：`[scope][DEVICE] 类别：业务值`；旧格式 `[DEVICE][CODE]` 仍可读。
+            if kind:
+                if not re.fullmatch(r"[A-Z][A-Z0-9_]*", kind):
+                    errors.append(f"第 {number} 行设备状态码不合法: {kind}")
+            else:
+                for token in ("raw_marker=", "rule=", "rule_id=", "catalog_status=",
+                              "raw_code=", "correlation_id=", "device_ts=", "event_seq="):
+                    if token in body:
+                        errors.append(f"第 {number} 行设备行泄露内部信息: {token}")
+                if "：" not in body:
+                    errors.append(f"第 {number} 行设备行缺少“类别：业务值”结构")
         elif kind not in TOOL_LOG_KINDS:
-            errors.append(f"第 {number} 行使用未注册阶段标签 {kind}")
+            errors.append(f"第 {number} 行使用未注册阶段标签 {kind or '<缺失>'}")
     return errors
 
 
-def render_tool_log(summary: Mapping[str, Any], records: Sequence[EventRecord]) -> str:
+def render_tool_log(summary: Mapping[str, Any], records: Sequence[EventRecord],
+                    display_format: str | None = None) -> str:
     """把事件渲染成完整动作审计：每个事件一行，按 host 毫秒排序。
 
     规则：
     - TOOL 与 DEVICE 事件同一时序；不写续行、不写空行、不写汇总段落。
     - 每行自足：范围/动作/阶段 + 做法 + 前后状态 + 判断依据 + 证据。
     - 连续重复的 DEVICE 状态合并为一行并给出 repeat_count 与 last_hit。
+    - ``display_format="unified"`` 时设备行只显示统一类别与业务值（默认）；
+      旧摘要（meta 无 ``display_format``）按 legacy 渲染，保证旧目录仍可 verify。
     """
+    if display_format is None:
+        display_format = (summary.get("meta") or {}).get("display_format") or "legacy"
+        display_format = "unified" if str(display_format).startswith("unified") else "legacy"
     ordered = sorted(
         enumerate(records),
         key=lambda pair: (ensure_ms(pair[1].time) or "9999-12-31 23:59:59.999", pair[0]),
@@ -1825,11 +1917,14 @@ def render_tool_log(summary: Mapping[str, Any], records: Sequence[EventRecord]) 
             # 受控去重：连续重复的设备状态只占一行，记录 repeat_count 与 last_hit。
             pending["repeat"] += 1
             pending["last"] = stamp
-            lines[pending["index"]] = (
-                f"{pending['base']} | repeat={pending['repeat']} | last_hit={pending['last']}"
-            )
+            if display_format == "unified":
+                lines[pending["index"]] = f"{pending['base']}（repeat={pending['repeat']}）"
+            else:
+                lines[pending["index"]] = (
+                    f"{pending['base']} | repeat={pending['repeat']} | last_hit={pending['last']}"
+                )
             continue
-        line = _audit_line(record, summary, since_prev=since_prev)
+        line = _audit_line(record, summary, since_prev=since_prev, display_format=display_format)
         lines.append(line)
         pending = {
             "signature": signature, "repeat": 1, "last": stamp,
@@ -1853,6 +1948,7 @@ class DeviceMarker:
     host_from: str = "record"
     category: str | None = None
     state: str | None = None
+    display: Mapping[str, Any] | None = None
 
 
 class MarkerConfigError(ValueError):
@@ -1887,6 +1983,7 @@ def load_markers(value: Mapping[str, Any] | str | Path | None) -> tuple[list[Dev
             host_from=str(item.get("host_from") or "record"),
             category=(str(item["category"]).upper() if item.get("category") else None),
             state=(str(item["state"]) if item.get("state") else None),
+            display=(item["display"] if isinstance(item.get("display"), Mapping) else None),
         ))
     ts_pattern = payload.get("device_ts_pattern")
     device_ts = re.compile(str(ts_pattern)) if ts_pattern else DEVICE_TS_RE
@@ -1961,9 +2058,12 @@ def derive_device_events(
     *,
     device_ts_pattern: re.Pattern[str] | None = None,
     round_power_on: Mapping[Any, str] | None = None,
+    extension: "state_catalog.StateExtension | None" = None,
 ) -> list[EventRecord]:
     """从 TOOL 事件的 raw 中派生 DEVICE 状态事件。
 
+    - 状态码先过通用目录/profile 扩展；未登记的 marker 码落 ``DEVICE_UNPARSED``，
+      原始码保留在 ``details.raw_code``，不静默渲染成正式状态。
     - 同一事件里连续相同的 marker 合并为一条，保留 repeat_count 与 last_hit。
     - 无法解析的 raw 行不静默丢弃：调用方可用 :func:`device_unparsed_event` 显式提交。
     """
@@ -1976,6 +2076,8 @@ def derive_device_events(
         if raw is None:
             continue
         for marker in markers:
+            code, definition, catalog_status = state_catalog.resolve_device_code(marker.code, extension)
+            unregistered = code == state_catalog.UNPARSED_CODE
             texts = _raw_texts(raw, marker.source)
             hits: list[dict[str, Any]] = []
             for text in texts:
@@ -1990,27 +2092,49 @@ def derive_device_events(
             repeat = len(hits)
             details: dict[str, Any] = {
                 "device": True,
-                "audit_category": marker.category or "DEVICE",
-                "audit_kind": marker.kind,
+                "audit_category": "DEVICE" if unregistered else (marker.category or definition.category.upper()),
+                "audit_kind": marker.kind or "STATE",
                 "marker": marker.code,
+                "catalog_status": catalog_status,
                 "repeat_count": repeat,
                 "source_event": record.event,
                 "source_event_seq": record.event_seq,
                 "parameters": hits[0],
             }
+            if unregistered:
+                details["unparsed"] = True
+                details["raw_code"] = marker.code
+                details["raw_sha256"] = sha256_bytes((texts[0] if texts else marker.code).encode("utf-8"))
+                details["raw_excerpt"] = _clip(one_line(texts[0] if texts else marker.code), 200)
+            elif code != marker.code:
+                details["raw_code"] = marker.code
             if repeat > 1:
                 details["last_hit"] = timestamp
             if device_ts:
                 details["device_ts"] = device_ts
             if marker.state:
                 details["state"] = marker.state
+            if not unregistered:
+                base_display: dict[str, Any] = {
+                    "category": state_catalog.display_category(code, definition),
+                    "stage": state_catalog.DISPLAY_STAGE.get(code, ""),
+                    "label": definition.label_zh,
+                }
+                if isinstance(marker.display, Mapping):
+                    base_display.update({str(key): value for key, value in marker.display.items()})
+                details["display"] = base_display
             evidence = list(record.evidence or [])
             if not evidence and record.raw_ref and record.raw_ref.get("path"):
                 evidence = [{"path": record.raw_ref["path"]}]
+            message = marker.message
+            level = "INFO"
+            if unregistered:
+                message = f"未登记状态码 {marker.code}（{marker.message}）"
+                level = "WARN"
             derived.append(EventRecord(
-                event=marker.code,
+                event=code,
                 time=timestamp or record.time,
-                level="INFO",
+                level=level,
                 task_id=record.task_id,
                 round=record.round,
                 case_id=record.case_id,
@@ -2020,7 +2144,7 @@ def derive_device_events(
                 port_role=record.port_role,
                 attempt=record.attempt,
                 correlation_id=record.correlation_id,
-                message=marker.message,
+                message=message,
                 details=details,
                 evidence=evidence,
             ))
@@ -2056,19 +2180,72 @@ def write_device_event(
     writer: "EventLogWriter",
     line: str,
     *,
+    code: str | None = None,
+    state: str | None = None,
+    category: str | None = None,
+    message: str | None = None,
+    device: str | None = None,
+    port_role: str | None = None,
     host_time: str | None = None,
     evidence: Sequence[Mapping[str, Any]] | None = None,
     round_value: Any = None,
+    extension: "state_catalog.StateExtension | None" = None,
 ) -> dict[str, Any]:
-    """适配器提交任何设备行：先按 marker 映射，未命中则记 DEVICE_UNPARSED。"""
+    """适配器提交设备行/设备状态。
+
+    - 给出 ``code`` 时先按通用目录或 profile 扩展解析；未登记仍落 ``DEVICE_UNPARSED``，
+      原始码写入 ``details.raw_code``，原始行摘要与 sha256 一并保留。
+    - 不给 ``code`` 时保持旧行为：整行按未识别设备行记 ``DEVICE_UNPARSED``。
+    """
+    text = one_line(line)
+    if code:
+        semantic, definition, catalog_status = state_catalog.resolve_device_code(code, extension)
+        unregistered = semantic == state_catalog.UNPARSED_CODE
+        details: dict[str, Any] = {
+            "device": True,
+            "audit_kind": "STATE",
+            "marker": str(code).upper(),
+            "catalog_status": catalog_status,
+            "raw_code": str(code).upper(),
+            "raw_sha256": sha256_bytes(str(line).encode("utf-8")),
+            "raw_excerpt": _clip(text, 200),
+        }
+        if state:
+            details["state"] = state
+        if unregistered:
+            details["audit_category"] = "DEVICE"
+            details["unparsed"] = True
+            default_message = f"未登记状态码 {str(code).upper()}：{text}"
+            level = "WARN"
+        else:
+            details["audit_category"] = (category or definition.category).upper()
+            details["display"] = {
+                "category": state_catalog.display_category(semantic, definition),
+                "stage": state_catalog.DISPLAY_STAGE.get(semantic, ""),
+                "label": definition.label_zh,
+            }
+            default_message = f"{definition.label_zh}：{text}"
+            level = "INFO"
+        return writer.emit(
+            semantic,
+            time=ensure_ms(host_time) or now_human(), level=level, round=round_value,
+            source="device", device=device, port_role=port_role,
+            message=_clip(message or default_message, 240), details=details,
+            evidence=normalize_evidence(list(evidence or [])),
+        )
     record = device_unparsed_event(line, host_time=host_time, evidence=evidence,
                                    task_id=writer.task_id, round_value=round_value)
-    return writer.emit(
+    payload = writer.emit(
         record.event,
         time=record.time, level=record.level, round=record.round,
         source=record.source, message=record.message, details=record.details,
         evidence=record.evidence,
     )
+    if device:
+        payload["device"] = device
+    if port_role:
+        payload["port_role"] = port_role
+    return payload
 
 
 def _inline_value(value: Any, limit: int = 160) -> str:
@@ -2175,6 +2352,42 @@ def render_summary_md(summary: Mapping[str, Any]) -> str:
         lines.append("状态冲突：")
         for item in conflicts:
             lines.append(f"- `{item['code']}`：{item['detail']} → 已按 `{item['resolved_as']}` 处理")
+    lines.append("")
+    lines.append("## 3.1 设备状态目录")
+    lines.append("")
+    state_report = summary.get("state_report") or {}
+    if not state_report or not state_report.get("device_events"):
+        lines.append("无设备状态事件。")
+    else:
+        catalog = state_report.get("catalog") or {}
+        lines.append(
+            f"目录：通用 {catalog.get('common_states')} 条；"
+            f"项目 `{catalog.get('profile_id') or '未加载'}` "
+            f"{catalog.get('project_states', 0)} 条；设备事件 {state_report.get('device_events')} 条。"
+        )
+        lines.append("")
+        lines.append("| 类别 | 事件数 |")
+        lines.append("|---|---|")
+        for category, count in (state_report.get("by_category") or {}).items():
+            lines.append(f"| {category} | {count} |")
+        status = state_report.get("catalog_status") or {}
+        lines.append("")
+        lines.append(
+            f"目录校验：通用 {status.get('common', 0)} / 项目 {status.get('project', 0)} / "
+            f"未登记 {status.get('unregistered', 0)}；"
+            f"重复合并 {((state_report.get('duplicates') or {}).get('collapsed_events', 0))} 条；"
+            f"迟到 {len(state_report.get('late') or [])} 条；"
+            f"前置缺失 {len(state_report.get('prerequisite_missing') or [])} 条；"
+            f"未恢复阻断 {len((state_report.get('blocking') or {}).get('unrecovered') or [])} 条。"
+        )
+        required = state_report.get("required_states") or {}
+        if required.get("declared"):
+            lines.append("")
+            lines.append(
+                f"必需状态：{', '.join(required.get('declared') or [])}；"
+                f"已出现 {', '.join(required.get('present') or []) or '无'}；"
+                f"缺失 {', '.join(required.get('missing') or []) or '无'}。"
+            )
     lines.append("")
     lines.append("## 4. 结果统计")
     lines.append("")
@@ -2305,7 +2518,8 @@ def _round_line(item: Mapping[str, Any]) -> str:
 
 def write_bundle(records: Sequence[EventRecord], out_dir: Path, *,
                  meta: Mapping[str, Any] | None = None,
-                 events_path: Path | None = None) -> dict[str, Any]:
+                 events_path: Path | None = None,
+                 extension: "state_catalog.StateExtension | None" = None) -> dict[str, Any]:
     """写 tool.log / summary.md / summary.json；返回落盘的 summary。
 
     ``tool.log`` 是完整动作审计（每个事件一行），不是摘要；结论只存在于 summary。
@@ -2317,7 +2531,7 @@ def write_bundle(records: Sequence[EventRecord], out_dir: Path, *,
     context = dict(meta or {})
     if events.is_file():
         context.setdefault("events_sha256", sha256_file(events))
-    summary = summarize(records, meta=context)
+    summary = summarize(records, meta=context, extension=extension)
     payload = public_summary(summary)
     (out_dir / "summary.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -2327,7 +2541,9 @@ def write_bundle(records: Sequence[EventRecord], out_dir: Path, *,
     return payload
 
 
-def verify_bundle(run_dir: Path, *, check_files: bool = False) -> list[dict[str, str]]:
+def verify_bundle(run_dir: Path, *, check_files: bool = False,
+                  extension: "state_catalog.StateExtension | None" = None,
+                  strict_states: bool = False) -> list[dict[str, str]]:
     """校验一个 v2 运行目录；返回 findings（code/level/message）。空列表 = 通过。"""
     run_dir = Path(run_dir)
     findings: list[dict[str, str]] = []
@@ -2402,10 +2618,14 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False) -> list[dict[str,
         "environment": stored.get("environment") or {},
         "tool": (stored.get("tooling") or {}).get("tool"),
         "profile_id": (stored.get("tooling") or {}).get("profile_id"),
-    })
+    }, extension=extension)
     expected = public_summary(regenerated)
     for key in sorted(set(expected) | set(stored)):
         if key == "meta":
+            continue
+        if key not in stored and key == "state_report":
+            add("SUMMARY_DRIFT", "WARN",
+                "旧版本 summary.json 缺少 state_report；重新 render 即可补齐")
             continue
         if expected.get(key) != stored.get(key):
             add("SUMMARY_DRIFT", "ERROR", f"summary.json 与事件重算不一致: {key}")
@@ -2417,7 +2637,9 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False) -> list[dict[str,
 
     if (run_dir / "tool.log").is_file():
         tool_log = (run_dir / "tool.log").read_text(encoding="utf-8")
-        rendered = render_tool_log(regenerated, records)
+        display_format = ("unified" if str((stored.get("meta") or {}).get("display_format", "")).startswith("unified")
+                          else "legacy")
+        rendered = render_tool_log(regenerated, records, display_format=display_format)
         if rendered != tool_log:
             add("TOOL_LOG_DRIFT", "ERROR", "tool.log 与事件重算不一致（疑似手工修改）")
         for problem in validate_tool_log_text(tool_log):
@@ -2445,6 +2667,28 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False) -> list[dict[str,
             add("ABS_PATH", "ERROR", f"{name} 含 POSIX 绝对路径")
         if re.search(r"(?i)\b(access_key_secret|access_key_id|lstts_tts_token|lstest_tts_token)\b\s*[:=]\s*\S", text):
             add("SECRET", "ERROR", f"{name} 疑似包含凭据值")
+    # 状态目录：未登记码 / 迟到 / 前置缺失 / 未恢复阻断。
+    state_report = expected.get("state_report") or {}
+    unregistered_level = "ERROR" if strict_states else "WARN"
+    for item in state_report.get("unregistered") or []:
+        add("STATE_UNREGISTERED", unregistered_level,
+            f"event_seq={item.get('event_seq')} 设备状态码未登记: {item.get('code')}"
+            f"（raw_code={item.get('raw_code')}）")
+    for item in state_report.get("late") or []:
+        add("STATE_LATE", "WARN",
+            f"{item.get('code')} 的 device_ts={item.get('device_ts')} 早于上一条设备事件"
+            f"（host={item.get('time')}）")
+    if state_report.get("prerequisites_strict"):
+        for item in state_report.get("prerequisite_missing") or []:
+            add("STATE_PREREQUISITE", "WARN",
+                f"{item.get('code')} 缺少前置状态: {', '.join(item.get('missing') or [])}")
+    for item in (state_report.get("blocking") or {}).get("unrecovered") or []:
+        add("STATE_UNRECOVERED", unregistered_level,
+            f"{item.get('code')} 处于阻断状态且窗口内无恢复（host={item.get('time')}）")
+    for code, value in sorted((state_report.get("gate_checks") or {}).items()):
+        if value is False:
+            add("STATE_GATE", "WARN", f"状态 gate 未通过: {code}")
+
     # 同一缺失证据只报一次，避免旧日志批量导入时刷屏。
     seen: set[tuple[str, str]] = set()
     deduped: list[dict[str, str]] = []
@@ -2478,4 +2722,9 @@ def schema_document() -> dict[str, Any]:
         "tool_log_rule": "tool.log 每个事件恰好一行，按 host 毫秒排序，含做法/状态/判断/证据，禁止续行与摘要",
         "tool_log_line": "<YYYY-MM-DD HH:MM:SS.mmm> [<范围>][<动作>][<阶段>]([<结果>]) <描述> | k=v | evidence=<路径#行号>",
         "device_rule": "DEVICE 事件与 TOOL 事件同一毫秒时序；连续重复状态合并并记 repeat_count/last_hit",
+        "state_catalog": state_catalog.schema_document(),
+        "state_rule": (
+            "设备状态码必须登记在通用目录或 lstest.state-extension.v1 项目扩展；"
+            "未登记码落 DEVICE_UNPARSED 并保留 raw_code，禁止静默渲染"
+        ),
     }

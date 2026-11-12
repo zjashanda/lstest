@@ -25,6 +25,7 @@
 - `references/result-log-standard.md`
 - `references/scenario-api.md`
 - `references/structured-event-log-v2.md`
+- `references/state-catalog.md`（设备状态目录/项目扩展/PASS gate）
 - `references/node-integration.md`
 - `requirements.txt`
 - `scripts/__init__.py`
@@ -51,6 +52,7 @@
 - `scripts/serial_recovery.py`
 - `scripts/shell.py`
 - `scripts/smoke.py`
+- `scripts/states.py`（状态目录、扩展校验、时序分析、覆盖率）
 - `scripts/timeline.py`
 - `scripts/timing.py`
 - `tests/__init__.py`
@@ -62,6 +64,11 @@
 - `tests/test_environment_cleanup.py`
 - `tests/test_foundation.py`
 - `tests/test_eventlog.py`
+- `tests/test_state_catalog.py`
+- `tests/fixtures/state_catalog_smoke.txt`
+- `tests/fixtures/state_catalog_smoke.markers.json`
+- `tests/fixtures/state_catalog_smoke.extension.json`
+- `tests/fixtures/state_catalog_smoke.meta.json`
 - `tests/fixtures/legacy_flat_v1_smoke10.txt`
 - `tests/fixtures/legacy_flat_v1_smoke10.meta.json`
 - `tests/fixtures/legacy_flat_v1_smoke10.markers.json`

@@ -1,0 +1,75 @@
+{
+  "_comment": "状态目录 golden 样本的项目 marker 表：含通用码、别名码、项目 P_ 码和一个未登记码（应降级为 DEVICE_UNPARSED）。原始 marker 文本只作为样例，不对应任何真实客户设备。",
+  "markers": [
+    {
+      "source": "boot_raw",
+      "code": "READY",
+      "category": "DEVICE",
+      "kind": "STATE",
+      "host_from": "record",
+      "message": "系统就绪",
+      "pattern": "system ready",
+      "state": "BOOTING→READY"
+    },
+    {
+      "source": "wake_raw",
+      "code": "PRE_WAKEUP",
+      "category": "DEVICE",
+      "kind": "STATE",
+      "host_from": "record",
+      "message": "设备上报预唤醒",
+      "pattern": "Pre Wakeup:.*?\"ncm\":(?P<ncm>\\d+),\"ncmThreshold\":(?P<threshold>\\d+)",
+      "state": "IDLE→WAKE_DETECTED"
+    },
+    {
+      "source": "wake_raw",
+      "code": "WAKE_HIT",
+      "category": "DEVICE",
+      "kind": "STATE",
+      "host_from": "record",
+      "message": "项目自有唤醒码（别名到 WAKEUP）",
+      "pattern": "\"keyword\":\"(?P<keyword>[^\"]+)\"",
+      "state": "IDLE→WAKEUP"
+    },
+    {
+      "source": "start_raw",
+      "code": "PLAYER_START",
+      "category": "DEVICE",
+      "kind": "STATE",
+      "host_from": "record",
+      "message": "设备开始播报",
+      "pattern": "start player",
+      "state": "IDLE→PLAYING"
+    },
+    {
+      "source": "complete_raw",
+      "code": "PLAYER_COMPLETE",
+      "category": "DEVICE",
+      "kind": "STATE",
+      "host_from": "record",
+      "message": "设备播报结束",
+      "pattern": "Refresh PA to OFF",
+      "state": "PLAYING→COMPLETE"
+    },
+    {
+      "source": "stdout_stderr",
+      "code": "P_TCL_SETLOGLEV_OK",
+      "category": "DEVICE",
+      "kind": "STATE",
+      "host_from": "record",
+      "message": "项目状态：日志级别设置成功",
+      "pattern": "setloglev (?P<level>\\d+) success",
+      "state": "READY→READY"
+    },
+    {
+      "source": "stdout_stderr",
+      "code": "BOGUS_STATE",
+      "category": "DEVICE",
+      "kind": "STATE",
+      "host_from": "record",
+      "message": "未登记的项目私有码",
+      "pattern": "vendor_magic_line",
+      "state": "READY→UNKNOWN"
+    }
+  ]
+}
