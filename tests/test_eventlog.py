@@ -531,6 +531,18 @@ class TimeContractLintTests(unittest.TestCase):
                 for pattern in self.FORBIDDEN:
                     self.assertIsNone(pattern.search(line), f"命中 {pattern.pattern}: {line[:120]}")
 
+    def test_log_clock_is_ms_while_record_clock_stays_seconds(self) -> None:
+        from lstest.scripts.core import now_log, now_text
+
+        self.assertRegex(now_log(), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$")
+        self.assertRegex(now_text(), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        with tempfile.TemporaryDirectory() as tmp:
+            structured = TaskArtifacts(Path(tmp), "ms", structured_events=True)
+            structured.finalize("PASS", "fixture")
+            lines = (structured.run_dir / "tool.live.log").read_text(encoding="utf-8").splitlines()
+            self.assertTrue(lines)
+            self.assertRegex(lines[0][:23], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$")
+
     def test_module_source_has_no_forbidden_strftime(self) -> None:
         source = Path(eventlog.__file__).read_text(encoding="utf-8")
         self.assertNotIn("%Y-%m-%dT", source)

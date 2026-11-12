@@ -16,9 +16,9 @@ except ImportError:  # pragma: no cover - preflight reports the missing dependen
     serial = None
 
 try:
-    from .core import PortSpec, TaskArtifacts, now_human
+    from .core import PortSpec, TaskArtifacts, now_log
 except ImportError:  # direct execution fallback
-    from core import PortSpec, TaskArtifacts, now_human
+    from core import PortSpec, TaskArtifacts, now_log
 
 
 MAX_EVENTS_PER_PORT = 20000
@@ -103,7 +103,7 @@ class SerialManager:
                         continue
                     text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
                     self.cursors[spec.port] += 1
-                    timestamp = now_human()
+                    timestamp = now_log()
                     event = SerialEvent(spec.port, role, self.cursors[spec.port], timestamp, time.monotonic(), text)
                     with self._events_lock:
                         events = self.events[spec.port]

@@ -37,6 +37,9 @@
    python -m lstest.scripts.lstest eventlog verify --run-dir <结果目录> [--check-files]
    ```
 
+   注意：日志行必须用 `now_log()`（毫秒）；`now_text()` 只用于 manifest/receipt/
+   results.csv 等记录字段。混用会让 `verify` 的 `TIME_FORMAT` 报错。
+
    `ERROR=0` 才算产物合格；`WARN` 需要人工确认（例如源日志状态冲突）。
 
 ## 2. 最小可运行示例
@@ -91,7 +94,7 @@ summary = artifacts.finalize("PASS", "smoke10 完成")
 
 | 旧字段 | v2 位置 | 说明 |
 |---|---|---|
-| `time` | `time` | 北京时间毫秒；只到秒的输入自动补 `.000` |
+| `time` | `time` | 北京时间毫秒（`now_log()`）；只到秒的输入自动补 `.000`。记录字段仍用 `now_text()` 秒级 |
 | `event` | `event` | 大写事件名 |
 | `task_id` / `round` / `case_id` / `phase` | 同名字段 | 不变 |
 | `status` / `reason` | 同名字段 | 不变 |

@@ -13,7 +13,7 @@
 
 ## v2（完整动作审计）
 
-11. `events.jsonl` 一行一个事件，字段固定为 `lstest.event.v2` 清单；`event_seq` 从 1 连续，缺失值为 `null` 而非 `-`，时间为北京时间毫秒。
+11. `events.jsonl` 一行一个事件，字段固定为 `lstest.event.v2` 清单；`event_seq` 从 1 连续，缺失值为 `null` 而非 `-`，时间为北京时间毫秒（`now_log()`；记录字段仍用 `now_text()` 秒级）。
 12. `raw` 全部外置到 `raw/e<seq>_<EVENT>.json`，事件只保留 `path`/`sha256`/`bytes`；`evidence` 为相对路径 + 行号 + 可选 sha256，产物中无绝对路径。
 13. `tool.log` 是完整动作审计：TOOL 动作与 DEVICE 状态合并，按 host 毫秒升序，**每个事件恰好一行**；无续行、无空行、无段落汇总，message 换行已转义。
 14. 每行自足：范围/动作/阶段/结果、做法与关键参数、前后状态、判断依据（expected/actual/hit/rule/阈值/next）、证据定位；不存在的字段不输出，不使用 `-` 占位。

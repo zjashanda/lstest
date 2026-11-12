@@ -279,7 +279,12 @@ python -m lstest.scripts.lstest eventlog verify --run-dir <dir> [--check-files] 
 ## 10. 时间契约（毫秒）与全局影响
 
 **lstest 口径**：所有日志行——`tool.log`、`events.jsonl` 的 `time`、串口包装事件、
-audio/PDU/runner 事件、判断日志——必须是北京时间 `YYYY-MM-DD HH:MM:SS.mmm`。
+audio/PDU/runner 事件、判断日志——必须是北京时间 `YYYY-MM-DD HH:MM:SS.mmm`
+（实现：`core.now_log()`，`FMT_LOG`）。
+
+记录字段（manifest/receipt/results.csv/文件名时间戳）仍按 ark-kb 时间契约使用秒级
+`YYYY-MM-DD HH:MM:SS`（`core.now_text()`），本次不改，避免连带破坏既有工具。
+v1 旧任务的 `tool.log` 保持秒级仅为兼容读取；新任务（v2）不产生秒级日志。
 
 - 设备原始行保留设备自身时钟原文；`serial_logs/*.log` 每行前缀是 **host 接收时间（毫秒）**，
   形如 `[2026-11-12 17:02:22.527] COM4 csk #12 <设备原文>`。

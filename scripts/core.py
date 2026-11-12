@@ -52,8 +52,10 @@ def now_dt() -> datetime:
 
 
 # 时间契约（ark-kb docs/time-contract.md）：记录层文本统一为北京时间、空格分隔、
-# 秒级；文件名戳用连字符。不输出 T 分隔、Z 后缀、数字时区偏移或小数秒。
+# 秒级；文件名戳用连字符。不输出 T 分隔、Z 后缀或数字时区偏移。
+# 日志行（tool/serial/runner/判断）另用毫秒：FMT_LOG / now_log。
 FMT_TEXT = "%Y-%m-%d %H:%M:%S"
+FMT_LOG = "%Y-%m-%d %H:%M:%S.%f"
 FMT_STAMP = "%Y%m%d-%H%M%S"
 
 
@@ -68,6 +70,15 @@ def now_iso() -> str:
 
 def now_human() -> str:
     return now_text()
+
+
+def now_log() -> str:
+    """日志行时间：北京时间毫秒。
+
+    记录字段（manifest/receipt/results.csv）仍用 ``now_text`` 的秒级格式；
+    日志流（tool.log/tool.live.log/serial 包装事件/runner 判断）必须用本函数。
+    """
+    return now_dt().strftime(FMT_LOG)[:-3]
 
 
 def sha256_file(path: Path) -> str:
@@ -375,7 +386,8 @@ class TaskArtifacts:
         self._terminal_stream: Any | None = terminal_stream
         self._terminal_mirror_failure_recorded = False
         self._legacy_stdout_disabled = False
-        self.timeline = TimelineLedger(self._append_timeline_line, now_human)
+        self._log_time = now_log if structured_events else now_human
+        self.timeline = TimelineLedger(self._append_timeline_line, self._log_time)
         result_fields = list(dict.fromkeys([*self.RESULT_FIELDS, *detail_fields]))
         self.detail_fields = list(detail_fields)
         results_exist = append and self.results_path.exists() and self.results_path.stat().st_size > 0
@@ -445,7 +457,7 @@ class TaskArtifacts:
                     if not self._terminal_mirror_failure_recorded:
                         self._terminal_mirror_failure_recorded = True
                         self._tool.write(
-                            f"{now_human()} [SYSTEM] 终端镜像不可用，后续过程仅写入 tool.log。\n"
+                            f"{self._log_time()} [SYSTEM] 终端镜像不可用，后续过程仅写入 tool.log。\n"
                         )
                         self._tool.flush()
 
@@ -533,7 +545,7 @@ class TaskArtifacts:
         expected = values.pop("expected", "")
         actual = values.pop("actual", "")
         known = {
-            "time": now_human(),
+            "time": self._log_time(),
             "level": level.upper(),
             "event": event,
             "task_id": self.task_id,
@@ -925,7 +937,7 @@ class TaskArtifacts:
         # from tool.log.
         if task_log and self._terminal_stream is None and not self._legacy_stdout_disabled:
             try:
-                print(f"{now_human()} [{level.upper()}] {message or event}", flush=True)
+                print(f"{self._log_time()} [{level.upper()}] {message or event}", flush=True)
             except (OSError, ValueError):
                 # A parent/CI pipe may close while the durable tool.log is
                 # still writable.  Do not turn that transport loss into a
