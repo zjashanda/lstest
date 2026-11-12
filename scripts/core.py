@@ -15,9 +15,11 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol, Sequence
 
 try:
+    from .eventlog import EventLogWriter
     from .observations import RawTag, ToolJudgement, raw_tags_from_mappings, render_observation
     from .timeline import TimelineLedger, ToolLogValidator, safe_basename
 except ImportError:  # direct execution fallback
+    from eventlog import EventLogWriter
     from observations import RawTag, ToolJudgement, raw_tags_from_mappings, render_observation
     from timeline import TimelineLedger, ToolLogValidator, safe_basename
 
@@ -50,8 +52,10 @@ def now_dt() -> datetime:
 
 
 # 时间契约（ark-kb docs/time-contract.md）：记录层文本统一为北京时间、空格分隔、
-# 秒级；文件名戳用连字符。不输出 T 分隔、Z 后缀、数字时区偏移或小数秒。
+# 秒级；文件名戳用连字符。不输出 T 分隔、Z 后缀或数字时区偏移。
+# 日志行（tool/serial/runner/判断）另用毫秒：FMT_LOG / now_log。
 FMT_TEXT = "%Y-%m-%d %H:%M:%S"
+FMT_LOG = "%Y-%m-%d %H:%M:%S.%f"
 FMT_STAMP = "%Y%m%d-%H%M%S"
 
 
@@ -66,6 +70,15 @@ def now_iso() -> str:
 
 def now_human() -> str:
     return now_text()
+
+
+def now_log() -> str:
+    """日志行时间：北京时间毫秒。
+
+    记录字段（manifest/receipt/results.csv）仍用 ``now_text`` 的秒级格式；
+    日志流（tool.log/tool.live.log/serial 包装事件/runner 判断）必须用本函数。
+    """
+    return now_dt().strftime(FMT_LOG)[:-3]
 
 
 def sha256_file(path: Path) -> str:
@@ -342,6 +355,7 @@ class TaskArtifacts:
         terminal_stream: Any | None = None,
         run_name: str | None = None,
         append: bool = False,
+        structured_events: bool = False,
     ):
         if run_name:
             self.run_dir = Path(result_root) / run_name
@@ -357,17 +371,23 @@ class TaskArtifacts:
             self.run_dir = candidate
         (self.run_dir / "serial_logs").mkdir(parents=True, exist_ok=True)
         self.task_id = self.run_dir.name
-        self.tool_log_path = self.run_dir / "tool.log"
+        self.tool_log_path = self.run_dir / ("tool.live.log" if structured_events else "tool.log")
         self.results_path = self.run_dir / "results.csv"
         self.cases_path = self.run_dir / "cases.csv"
         self.stop = StopSupervisor(self.run_dir / "STOP")
         self.stop_policy = StopPolicy(self.stop)
         self._lock = threading.RLock()
+        self.event_log = (
+            EventLogWriter(self.run_dir, self.task_id, fsync=False) if structured_events else None
+        )
+        self._event_log_failed = False
+        self.structured_summary: dict[str, Any] | None = None
         self._tool = self.tool_log_path.open("a", encoding="utf-8")
         self._terminal_stream: Any | None = terminal_stream
         self._terminal_mirror_failure_recorded = False
         self._legacy_stdout_disabled = False
-        self.timeline = TimelineLedger(self._append_timeline_line, now_human)
+        self._log_time = now_log if structured_events else now_human
+        self.timeline = TimelineLedger(self._append_timeline_line, self._log_time)
         result_fields = list(dict.fromkeys([*self.RESULT_FIELDS, *detail_fields]))
         self.detail_fields = list(detail_fields)
         results_exist = append and self.results_path.exists() and self.results_path.stat().st_size > 0
@@ -437,7 +457,7 @@ class TaskArtifacts:
                     if not self._terminal_mirror_failure_recorded:
                         self._terminal_mirror_failure_recorded = True
                         self._tool.write(
-                            f"{now_human()} [SYSTEM] 终端镜像不可用，后续过程仅写入 tool.log。\n"
+                            f"{self._log_time()} [SYSTEM] 终端镜像不可用，后续过程仅写入 tool.log。\n"
                         )
                         self._tool.flush()
 
@@ -525,7 +545,7 @@ class TaskArtifacts:
         expected = values.pop("expected", "")
         actual = values.pop("actual", "")
         known = {
-            "time": now_human(),
+            "time": self._log_time(),
             "level": level.upper(),
             "event": event,
             "task_id": self.task_id,
@@ -554,6 +574,14 @@ class TaskArtifacts:
             "message": message,
             "details": values,
         }
+        if self.event_log is not None and not self._event_log_failed:
+            try:
+                payload = dict(known)
+                payload.pop("event", None)
+                self.event_log.emit(event, **payload)
+            except (OSError, ValueError) as error:  # 结构化日志不得中断测试执行
+                self._event_log_failed = True
+                self.add_sticky("TOOL_EXCEPTION", f"结构化事件写入失败: {error}", resource="events.jsonl")
         return self._render_tool_line(event, level, message, known)
 
     def _render_tool_line(self, event: str, level: str, message: str, known: Mapping[str, Any]) -> str:
@@ -909,7 +937,7 @@ class TaskArtifacts:
         # from tool.log.
         if task_log and self._terminal_stream is None and not self._legacy_stdout_disabled:
             try:
-                print(f"{now_human()} [{level.upper()}] {message or event}", flush=True)
+                print(f"{self._log_time()} [{level.upper()}] {message or event}", flush=True)
             except (OSError, ValueError):
                 # A parent/CI pipe may close while the durable tool.log is
                 # still writable.  Do not turn that transport loss into a
@@ -1553,6 +1581,15 @@ class TaskArtifacts:
             raw=summary,
             handling="results.csv counts reconciled before final status",
         )
+        if self.event_log is not None and not self._event_log_failed:
+            try:
+                self.structured_summary = self.event_log.finalize(meta={
+                    "title": self.task_id,
+                    "purpose": None,
+                    "scope": None,
+                })
+            except (OSError, ValueError) as error:  # 结构化摘要失败不得改变测试结论
+                self.add_sticky("TOOL_EXCEPTION", f"结构化摘要生成失败: {error}", resource="summary.json")
         for handle in (self._tool, self._csv, self._cases):
             if handle is not None:
                 handle.close()

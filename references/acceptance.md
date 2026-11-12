@@ -10,3 +10,17 @@
 8. 普通工具/设备异常、解析异常、识别失败、超时和播放器失败完成本轮并继续；只有退出白名单可结束任务。
 9. 结果目录只含 `serial_logs/*.log`、`tool.log`、`results.csv`、`cases.csv`，没有 `.bin`、task/tool JSONL 或额外日志。
 10. `ToolLogValidator`、Python 编译、全部单元/fixture 测试及已授权的只读日志回放通过；真机测试风险单独说明。
+
+## v2（完整动作审计）
+
+11. `events.jsonl` 一行一个事件，字段固定为 `lstest.event.v2` 清单；`event_seq` 从 1 连续，缺失值为 `null` 而非 `-`，时间为北京时间毫秒（`now_log()`；记录字段仍用 `now_text()` 秒级）。
+12. `raw` 全部外置到 `raw/e<seq>_<EVENT>.json`，事件只保留 `path`/`sha256`/`bytes`；`evidence` 为相对路径 + 行号 + 可选 sha256，产物中无绝对路径。
+13. `tool.log` 是完整动作审计：TOOL 动作与 DEVICE 状态合并，按 host 毫秒升序，**每个事件恰好一行**；无续行、无空行、无段落汇总，message 换行已转义。
+14. 每行自足：范围/动作/阶段/结果、做法与关键参数、前后状态、判断依据（expected/actual/hit/rule/阈值/next）、证据定位；不存在的字段不输出，不使用 `-` 占位。
+15. 设备状态必须出现在 `tool.log`，统一为 `[范围][DEVICE][状态码]`（如 `[R01][DEVICE][POWER_OFF]`、`[R01/A02][DEVICE][WAKEUP]`、`[R01/A02][DEVICE][ASR_RESULT]`）：电源/BOOT/READY、串口、唤醒（含关键词/分数/阈值）、识别、TTS、播放、录音/VAD、异常恢复；连续重复状态合并并记 `repeat`/`last_hit`，未识别行记 `DEVICE_UNPARSED`（含 raw hash 与证据）。
+16. `TASK_END` 行同时给出 `recorded`、`test_outcome`、`delivery`、`final`、`gate`、`rounds`；`gate_pass=false` 时 `final_status` 不为 `PASS`，状态冲突写入 `conflicts[]`；无 gate 判 `NEEDS_REVIEW`。
+17. `NO_WAKE` 记为一次 attempt 结果（不是工具 ERROR），计入首轮成功率与尝试分布；缺 `TASK_END` 按中断判 `NEEDS_REVIEW`。
+18. 旧 29 字段平铺日志可被 `eventlog build` 迁移：容错 CRLF/BOM/缺空行/多行 JSON/`-`/缺字段/中文/Windows 路径/超大 raw；`--markers` 派生 DEVICE 事件；迁移不修改源文件。
+19. `eventlog verify` 对 seq、时间格式、summary 重算、`tool.log` 重算与单行语法、gate 冲突、绝对路径、sha256 全部检查通过；`ToolLogValidator.validate_run` 能按 v1/v2 分流。
+20. 串口原始日志每行前缀为 host 接收毫秒时间，设备自身时钟保留在原文；`tool.log` 对应行可附 `device_ts`。
+21. 节点接入按 `references/node-integration.md` 五步完成：结构化运行产出四件套、`TASK_END` 写 gate、`eventlog verify --check-files` 为 `ERROR=0`；未完成前只能报 `NEEDS_REVIEW`，不得宣称真机验证。

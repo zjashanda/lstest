@@ -1,0 +1,55 @@
+{
+  "_comment": "项目适配器提供的设备 marker 表；框架本身不内置任何项目 marker。source 指向事件 raw 中的字段，pattern 使用命名捕获组，命名组自动成为 tool.log 的 k=v 事实。",
+  "markers": [
+    {
+      "source": "wake_raw",
+      "code": "PRE_WAKEUP",
+      "category": "WAKE",
+      "kind": "STATE",
+      "host_from": "play_end",
+      "message": "设备上报预唤醒",
+      "pattern": "Pre Wakeup:.*?\"ncm\":(?P<ncm>\\d+),\"ncmThreshold\":(?P<threshold>\\d+).*?\"keyword\":\"(?P<keyword>[^\"]+)\".*?\"bMain\":(?P<bMain>\\d+)",
+      "state": "IDLE→WAKE_DETECTED"
+    },
+    {
+      "source": "start_raw",
+      "code": "PLAYER_START",
+      "category": "PLAYER",
+      "kind": "STATE",
+      "host_from": "play_start",
+      "message": "设备开始响应播报",
+      "pattern": "start player",
+      "state": "IDLE→PLAYING"
+    },
+    {
+      "source": "complete_raw",
+      "code": "PLAYER_COMPLETE",
+      "category": "PLAYER",
+      "kind": "STATE",
+      "host_from": "play_end",
+      "message": "设备响应播报结束",
+      "pattern": "Refresh PA to OFF",
+      "state": "PLAYING→COMPLETE"
+    },
+    {
+      "source": "stdout_stderr",
+      "code": "POWER_OFF",
+      "category": "PDU",
+      "kind": "STATE",
+      "host_from": "power_on_minus_off",
+      "message": "PDU 断电成功",
+      "pattern": "断电成功",
+      "state": "ON→OFF"
+    },
+    {
+      "source": "stdout_stderr",
+      "code": "POWER_ON",
+      "category": "PDU",
+      "kind": "STATE",
+      "host_from": "power_on",
+      "message": "PDU 上电完成",
+      "pattern": "设备硬重启完成",
+      "state": "OFF→ON"
+    }
+  ]
+}

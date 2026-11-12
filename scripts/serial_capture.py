@@ -16,9 +16,9 @@ except ImportError:  # pragma: no cover - preflight reports the missing dependen
     serial = None
 
 try:
-    from .core import PortSpec, TaskArtifacts, now_iso
+    from .core import PortSpec, TaskArtifacts, now_log
 except ImportError:  # direct execution fallback
-    from core import PortSpec, TaskArtifacts, now_iso
+    from core import PortSpec, TaskArtifacts, now_log
 
 
 MAX_EVENTS_PER_PORT = 20000
@@ -103,7 +103,7 @@ class SerialManager:
                         continue
                     text = raw.decode("utf-8", errors="replace").rstrip("\r\n")
                     self.cursors[spec.port] += 1
-                    timestamp = now_iso()
+                    timestamp = now_log()
                     event = SerialEvent(spec.port, role, self.cursors[spec.port], timestamp, time.monotonic(), text)
                     with self._events_lock:
                         events = self.events[spec.port]
@@ -112,6 +112,7 @@ class SerialManager:
                         events.append(event)
                     # Each captured event occupies exactly one physical line;
                     # cursor therefore maps directly to the human log line.
+                    # 前缀是 host receive time（北京时间毫秒）；设备自身时钟保留在 text 原文中。
                     log.write(f"[{timestamp}] {spec.port} {role} #{self.cursors[spec.port]} {text}\n")
                     log.flush()
                     self.artifacts.emit("SERIAL_LINE", message=f"{spec.port}: {text[:180]}", task_log=False, port=spec.port, role=role, cursor=self.cursors[spec.port], line=text)

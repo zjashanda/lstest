@@ -149,6 +149,25 @@ def parser() -> argparse.ArgumentParser:
     dual.add_argument("--repeat", type=int, default=1)
     dual.add_argument("--gap", type=float, default=0.0)
     dual.add_argument("--skip-probe", action="store_true")
+    eventlog = sub.add_parser("eventlog", help="结构化事件日志 v2：导入旧日志、渲染人读产物、校验一致性")
+    eventlog_sub = eventlog.add_subparsers(dest="eventlog_command", required=True)
+    build = eventlog_sub.add_parser("build", help="把旧版 29 字段平铺日志迁移为 events.jsonl + run.log + summary")
+    build.add_argument("--legacy", type=Path, required=True, help="旧版平铺块日志（只读，不修改）")
+    build.add_argument("--out-dir", type=Path, required=True, help="新的 v2 结果目录")
+    build.add_argument("--task-id", default=None)
+    build.add_argument("--meta", type=Path, default=None, help="任务上下文 JSON（title/purpose/scope/inputs 等）")
+    build.add_argument("--markers", type=Path, default=None, help="设备 marker 表 JSON；提供后从 raw 派生 DEVICE 状态事件")
+    build.add_argument("--raw-min-bytes", type=int, default=0, help="raw 外置阈值；0 表示全部外置")
+    render = eventlog_sub.add_parser("render", help="从已有 events.jsonl 重新生成 run.log / summary.md / summary.json")
+    render.add_argument("--run-dir", type=Path, required=True)
+    render.add_argument("--meta", type=Path, default=None)
+    verify = eventlog_sub.add_parser("verify", help="校验 v2 目录：schema、序号、重算一致、判定冲突、路径泄漏")
+    verify.add_argument("--run-dir", type=Path, required=True)
+    verify.add_argument("--check-files", action="store_true", help="同时校验证据文件存在与 SHA-256")
+    verify.add_argument("--json", action="store_true")
+    schema_cmd = eventlog_sub.add_parser("schema", help="输出 v2 事件/摘要 schema 自描述")
+    schema_cmd.add_argument("--output", type=Path, default=None)
+
     pre = sub.add_parser("preflight", help="只检查 profile 和输入，不打开硬件")
     pre.add_argument("--profile", type=Path, required=True)
     pre.add_argument("--port", action="append", default=[])
@@ -173,6 +192,68 @@ def parser() -> argparse.ArgumentParser:
             help="device-io 产出的 snapshot/role-map JSON，指定后端口全部来自该文档",
         )
     return value
+
+
+def load_meta(path: Path | None) -> dict[str, object]:
+    if path is None:
+        return {}
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("--meta 必须是 JSON 对象")
+    return payload
+
+
+def run_eventlog_command(args: argparse.Namespace) -> int:
+    """结构化事件日志 v2 的命令实现；不打开设备、不访问网络。"""
+    try:
+        from . import eventlog
+    except ImportError:  # pragma: no cover - 直接执行回退
+        import eventlog  # type: ignore
+
+    meta = load_meta(getattr(args, "meta", None))
+    if args.eventlog_command == "build":
+        summary = eventlog.import_legacy_log(
+            args.legacy, args.out_dir, task_id=args.task_id,
+            raw_min_bytes=args.raw_min_bytes, meta=meta,
+            markers=getattr(args, "markers", None),
+        )
+    elif args.eventlog_command == "render":
+        records = eventlog.read_events(args.run_dir / "events.jsonl")
+        summary = eventlog.write_bundle(records, args.run_dir, meta=meta)
+    elif args.eventlog_command == "verify":
+        findings = eventlog.verify_bundle(args.run_dir, check_files=args.check_files)
+        errors = [item for item in findings if item["level"] == "ERROR"]
+        if args.json:
+            print(json.dumps({"status": "FAIL" if errors else "PASS", "findings": findings}, ensure_ascii=False, indent=2))
+        else:
+            if not findings:
+                print("PASS：v2 产物一致，无 ERROR/WARN")
+            for item in findings:
+                print(f"{item['level']:<5} {item['code']}: {item['message']}")
+            print(f"结论：{'FAIL' if errors else 'PASS'}（ERROR={len(errors)}，WARN={len(findings) - len(errors)}）")
+        return 2 if errors else 0
+    else:  # schema
+        payload = eventlog.schema_document()
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+        if args.output:
+            args.output.write_text(text + "\n", encoding="utf-8")
+            print(str(args.output))
+        else:
+            print(text)
+        return 0
+    print(json.dumps({
+        "status": "BUILT",
+        "result_dir": str(args.out_dir if args.eventlog_command == "build" else args.run_dir),
+        "task_id": summary.get("task_id"),
+        "events": (summary.get("meta") or {}).get("events_count"),
+        "test_outcome": summary.get("test_outcome"),
+        "delivery_status": summary.get("delivery_status"),
+        "final_status": summary.get("final_status"),
+        "round_success_rate": (summary.get("rates") or {}).get("round_success_rate"),
+        "first_attempt_success_rate": (summary.get("rates") or {}).get("first_attempt_success_rate"),
+        "failed_gate_checks": summary.get("delivery_failed_checks") or [],
+    }, ensure_ascii=False, indent=2))
+    return 0
 
 
 def run_audio_tool(args: argparse.Namespace) -> int:
@@ -222,11 +303,14 @@ def main(argv: list[str] | None = None) -> int:
             "capabilities": [
                 "dynamic-serial", "profile", "evidence", "basic-smoke", "safe-stop",
                 "indextts-tts", "audio-device-scan", "laid-installer", "device-key-playback",
+                "structured-event-log-v2",
             ],
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2) if args.json else "\n".join(payload["capabilities"]))
         return 0
     try:
+        if args.command == "eventlog":
+            return run_eventlog_command(args)
         if args.command == "tts":
             text = args.text
             if args.text_file is not None:
