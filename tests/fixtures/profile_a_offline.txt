@@ -1,0 +1,9 @@
+time: 2026-11-12 10:00:00.000
+level: INFO
+event: TASK_START
+task_id: profile-a-offline
+round: -
+status: PASS
+raw: {"wake_raw": "[2026-01-01 00:00:01.000][S] wakeup_callback, keyword: ni3 hao3", "asr_raw": "[2026-01-01 00:00:01.200][S] keyword:da3 kai1 kong1 tiao2", "tts_raw": "[2026-01-01 00:00:01.400][S] play id : 1"}
+message: 项目 A 原始日志（只有离线能力）
+details: {"profile_id": "profile-a-offline"}

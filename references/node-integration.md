@@ -9,15 +9,21 @@
 
 ## 1. 五步接入
 
-1. 结果目录由框架创建：`TaskArtifacts(result_root, task_slug, structured_events=True)`。
+1. 结果目录由框架创建：
+   `TaskArtifacts(result_root, task_slug, structured_events=True, state_extension=<扩展>)`。
+   - profile 声明了 `state_catalog` 时，用 `DeviceProfile.state_extension()` 取到扩展再传入；
    - 运行中 `tool.live.log` 可 tail；收尾由框架渲染 `tool.log`（验收对象）。
 2. 每个动作/判断调 `EventLogWriter.emit(...)`（或 `artifacts.emit(...)`，框架会镜像）。
    最少字段：`round`、`attempt`、`max_attempts`、`status`、`expected`、`actual`、
    `evidence`；有耗时给 `elapsed_ms`；有关联给 `action_id`/`correlation_id`。
-3. 设备状态用 `write_device_event(line, host_time=..., evidence=[...])` 提交：
-   - 命中项目 marker → 生成语义事件（`POWER_OFF`/`WAKEUP`/`ASR_RESULT`…）；
-   - 未命中 → 自动记 `DEVICE_UNPARSED`（含 `raw_sha256`），不丢行。
-   - 也可用 `eventlog build --markers <marker表.json>` 从历史 raw 派生。
+3. 设备状态用 `write_device_event(line, code=..., state=..., host_time=..., evidence=[...])` 提交：
+   - `code` 必须是 [state-catalog.md](state-catalog.md) 登记的通用码，或项目
+     `lstest.state-extension.v1` 扩展里的 `P_` 码；
+   - 未登记 → 自动记 `DEVICE_UNPARSED`（含 `raw_code`/`raw_sha256`），不丢行；
+   - 项目私有码、别名写进 profile 的 `state_catalog` 或单独扩展文件；
+   - marker 可带 `display`（category/stage/primary/fields）；tool.log 只显示统一类别与业务值，
+     不显示 raw marker、rule id 或捕获字段名；
+   - 也可用 `eventlog build --markers <marker表.json> --state-extension <扩展.json>` 从历史 raw 派生。
 4. 收尾必须写 `TASK_END`，并把 gate 放进 `actual.gate`：
 
    ```python
@@ -34,8 +40,12 @@
 5. 收尾后执行：
 
    ```bash
-   python -m lstest.scripts.lstest eventlog verify --run-dir <结果目录> [--check-files]
+   python -m lstest.scripts.lstest eventlog verify --run-dir <结果目录> [--check-files] \
+     [--state-extension <扩展.json>] [--strict-states]
    ```
+
+   `build` 用了扩展时，`verify` 必须给同一份扩展，否则 `summary`/`tool.log` 重算会判漂移。
+   `STATE_UNREGISTERED`/`STATE_UNRECOVERED` 默认 WARN，`--strict-states` 提升为 ERROR。
 
    注意：日志行必须用 `now_log()`（毫秒）；`now_text()` 只用于 manifest/receipt/
    results.csv 等记录字段。混用会让 `verify` 的 `TIME_FORMAT` 报错。

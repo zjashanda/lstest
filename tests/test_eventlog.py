@@ -26,7 +26,7 @@ GOLDEN_MARKERS = FIXTURES / "legacy_flat_v1_smoke10.markers.json"
 
 LINE_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} "
-    r"\[[^\]]+\]\[[A-Z_]+\]\[[A-Z_]+\](?:\[[A-Z_]+\])? .+$"
+    r"\[[^\]]+\]\[[A-Z_]+\](?:\[[A-Z_]+\])?(?:\[[A-Z_]+\])? .+$"
 )
 
 
@@ -95,17 +95,18 @@ class GoldenLogTests(unittest.TestCase):
         text = "\n".join(tool_lines(self.run_dir))
         for category in ("[RUN]", "[ENV]", "[SERIAL]", "[PDU]", "[WAKE]", "[REC]", "[RESULT]", "[DEVICE]"):
             self.assertIn(category, text)
-        self.assertEqual(text.count("[DEVICE][POWER_OFF]"), 10)
-        self.assertEqual(text.count("[DEVICE][POWER_ON]"), 10)
-        self.assertEqual(text.count("[DEVICE][PRE_WAKEUP]"), 10)
-        self.assertEqual(text.count("[DEVICE][PLAYER_START]"), 10)
-        self.assertEqual(text.count("[DEVICE][PLAYER_COMPLETE]"), 10)
-        self.assertIn("state=ON→OFF", text)
-        self.assertIn("state=OFF→ON", text)
+        self.assertEqual(text.count("[DEVICE] 电源：断电"), 10)
+        self.assertEqual(text.count("[DEVICE] 电源：上电"), 10)
+        self.assertEqual(text.count("[DEVICE] 唤醒："), 10)
+        self.assertEqual(text.count("[DEVICE] 播放："), 20)
+        self.assertEqual(text.count("：play_end"), 10)
         self.assertEqual(text.count("[WAKE][NO_WAKE]"), 10)
-        self.assertIn("device_ts=", text)
         self.assertIn("ncm=", text)
         self.assertIn("threshold=", text)
+        # 显示层不得出现内部解析信息
+        for forbidden in ("raw_marker=", "catalog_status=", "raw_code=", "rule=",
+                          "correlation_id=", "device_ts=", "event_seq="):
+            self.assertNotIn(forbidden, text)
 
     def test_judgement_and_verdict_are_explicit(self) -> None:
         text = "\n".join(tool_lines(self.run_dir))
@@ -264,10 +265,23 @@ class ToolLogUnitTests(unittest.TestCase):
             eventlog.write_bundle(eventlog.read_events(run_dir / "events.jsonl"), run_dir)
             lines = tool_lines(run_dir)
         self.assertEqual(len(lines), 2)
-        self.assertIn("[DEVICE][BOOT_STAGE]", lines[0])
+        self.assertIn("[DEVICE] 启动：boot", lines[0])
         self.assertIn("repeat=3", lines[0])
-        self.assertIn("last_hit=2026-11-12 10:00:02.000", lines[0])
         self.assertIn("就绪", lines[1])
+
+    def test_legacy_device_lines_remain_valid(self) -> None:
+        text = (
+            "2026-11-12 10:00:00.000 [R01][DEVICE][POWER_OFF] PDU 断电 | device_ts=2026-01-01 00:00:01.000\n"
+            "2026-11-12 10:00:01.000 [R01][DEVICE][UNPARSED] 未识别设备行\n"
+        )
+        self.assertEqual(eventlog.validate_tool_log_text(text), [])
+        # 旧摘要（无 display_format）默认按 legacy 渲染
+        record = eventlog.EventRecord(
+            event="POWER_OFF", time="2026-11-12 10:00:00.000", round=1, source="device",
+            message="断电", details={"device": True, "state": "ON→OFF"},
+        )
+        rendered = eventlog.render_tool_log({"tooling": {}}, [record])
+        self.assertIn("[R01][DEVICE][POWER_OFF]", rendered)
 
     def test_device_unparsed_keeps_hash_and_evidence(self) -> None:
         line = "totally unknown native line 中文"
@@ -621,16 +635,16 @@ class DeviceCoverageTests(unittest.TestCase):
             findings = eventlog.verify_bundle(run_dir)
         self.assertEqual(len(lines), len(records))
         text = "\n".join(lines)
-        for code in (
-            "BOOT_START", "READY", "SERIAL_UP", "WAKEUP", "ASR_START", "ASR_RESULT",
-            "TTS_START", "TTS_END", "PLAYER_START", "PLAYER_COMPLETE", "VAD_START",
-            "VAD_END", "INTENT", "ERROR", "RECOVERED", "UNPARSED",
+        for label in (
+            "启动：boot", "就绪：ready", "串口：up", "唤醒：keyword=kw", "asr：start",
+            "asr：intent=open", "tts：mode=online", "tts：end", "播放：volume=70",
+            "播放：play_end", "VAD：start", "VAD：end", "业务：command=switch1",
+            "异常：code=E42", "恢复：设备从错误状态恢复", "未识别设备状态：unknown native line",
         ):
-            self.assertIn(f"[DEVICE][{code}]", text, code)
+            self.assertIn(label, text, label)
         for line in lines:
             self.assertRegex(line, LINE_RE)
             self.assertNotIn("\n", line)
-        self.assertIn("state=FAULT→READY", text)
         self.assertIn("text_sha=abc123", text)
         self.assertEqual(summary["final_status"], "NEEDS_REVIEW")  # 无 ROUND_RESULT
         self.assertEqual([item for item in findings if item["level"] == "ERROR"], [])
@@ -645,8 +659,8 @@ class DeviceCoverageTests(unittest.TestCase):
             eventlog.write_event_records(records, run_dir / "events.jsonl")
             eventlog.write_bundle(eventlog.read_events(run_dir / "events.jsonl"), run_dir)
             lines = tool_lines(run_dir)
-        self.assertIn("[DEVICE][BOOT_START]", lines[0])
-        self.assertIn("[DEVICE][READY]", lines[1])
+        self.assertIn("[DEVICE] 启动：boot", lines[0])
+        self.assertIn("[DEVICE] 就绪：ready", lines[1])
 
 
 class CliTests(unittest.TestCase):

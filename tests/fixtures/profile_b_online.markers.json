@@ -1,0 +1,33 @@
+{
+  "_comment": "项目 B（在线、不同 marker 集）：只有唤醒后 TTS 与在线 ASR/TTS/Skill，不复制项目 A 的离线 marker。",
+  "markers": [
+    {
+      "source": "wake_tts_raw",
+      "code": "WAKE_TTS_CALLBACK",
+      "pattern": ".*wakeup_tts_callback, tts: (?P<tts_id>.*)",
+      "message": "唤醒后 TTS 回调",
+      "display": {"category": "tts", "fields": ["tts_id", "addr"], "stage": "wakeup_tts"}
+    },
+    {
+      "source": "online_asr_raw",
+      "code": "ONLINE_ASR_TEXT",
+      "pattern": ".*online_asr_callbak, text: (?P<text>.*)",
+      "message": "在线 ASR 文本",
+      "display": {"category": "online_asr", "primary": "text", "fields": ["zh", "request_id"]}
+    },
+    {
+      "source": "online_tts_raw",
+      "code": "ONLINE_TTS_TEXT",
+      "pattern": ".*online_asr_tts_callbak, tts: (?P<tts_id>.*)",
+      "message": "在线 TTS 回调",
+      "display": {"category": "online_tts", "fields": ["tts_id", "addr"], "stage": "play"}
+    },
+    {
+      "source": "online_skill_raw",
+      "code": "ONLINE_SKILL_TEXT",
+      "pattern": ".*online_skill_callbak, text: (?P<text>.*)",
+      "message": "在线 Skill 文本",
+      "display": {"category": "online_skill", "primary": "text", "fields": ["zh"]}
+    }
+  ]
+}

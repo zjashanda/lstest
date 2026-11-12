@@ -18,6 +18,7 @@ v2 补充的硬规则（v1 未覆盖）：
 - `gate_pass=false` 时最终状态禁止 `PASS`；`test_outcome` 与 `delivery_status` 分开表达，
   并在 `TASK_END` 那一行同时给出 `recorded`/`test_outcome`/`delivery`/`final`/`gate`。
 - 必须同时给出 `round_success_rate` 与 `first_attempt_success_rate`，禁止只报前者。
+- 设备状态码必须登记在 [state-catalog.md](state-catalog.md) 或项目扩展；未登记码落 `DEVICE_UNPARSED` 并保留 `raw_code`，不得静默渲染。
 - `tool.log`/`summary.md`/`summary.json` 只能由 `events.jsonl` 确定性生成，手改会被 `verify` 判漂移。
 
 ## v1：四产物（兼容层）

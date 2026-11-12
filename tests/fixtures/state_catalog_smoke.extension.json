@@ -1,0 +1,26 @@
+{
+  "schema": "lstest.state-extension.v1",
+  "profile_id": "state-catalog-demo",
+  "states": [
+    {
+      "code": "P_TCL_SETLOGLEV_OK",
+      "category": "mode",
+      "kind": "device",
+      "label_zh": "项目状态：日志级别设置成功",
+      "raw_marker": ["flash.setloglev 4 success"],
+      "prerequisites": ["READY"],
+      "successors": ["WAKEUP"],
+      "pass_role": "diagnostic",
+      "recoverable": false,
+      "duplicate_policy": "merge"
+    }
+  ],
+  "aliases": [
+    {"raw_code": "WAKE_HIT", "maps_to": "WAKEUP"}
+  ],
+  "gate": {
+    "required_states": ["READY", "WAKEUP", "PLAYER_COMPLETE", "P_TCL_SETLOGLEV_OK"],
+    "max_unrecovered_blocking": 0,
+    "recovery_window_s": 5
+  }
+}

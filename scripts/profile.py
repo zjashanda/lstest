@@ -297,6 +297,23 @@ class DeviceProfile:
         for field in ("correlation", "player_markers", "observations", "recovery", "health_policy", "marker_fixtures"):
             if field in payload and not isinstance(payload[field], Mapping):
                 raise ProfileError(f"{field} must be an object")
+        state_catalog_block = payload.get("state_catalog")
+        if state_catalog_block is not None:
+            if not isinstance(state_catalog_block, Mapping):
+                raise ProfileError("state_catalog must be an object")
+            candidate = dict(state_catalog_block)
+            candidate.setdefault("schema", "lstest.state-extension.v1")
+            candidate.setdefault("profile_id", profile_id)
+            if str(candidate.get("profile_id") or "").lower() != profile_id.lower():
+                raise ProfileError("state_catalog.profile_id must match profile_id")
+            try:
+                from . import states as state_catalog
+            except ImportError:  # pragma: no cover - 直接执行回退
+                import states as state_catalog  # type: ignore
+            try:
+                state_catalog.validate_extension(candidate)
+            except state_catalog.StateCatalogError as error:
+                raise ProfileError(f"state_catalog invalid: {error}") from error
         recovery = payload.get("recovery", {})
         if isinstance(recovery, Mapping):
             if "stop_on_failure" in recovery and not isinstance(recovery["stop_on_failure"], bool):
@@ -323,6 +340,17 @@ class DeviceProfile:
         cls._validate_marker_rules(payload)
         cls._validate_event_rules(payload)
         return cls(profile_id, schema_version, path, payload, sha256_file(path), MarkerGate())
+
+    def state_extension(self):
+        """返回 profile 内声明的状态扩展（lstest.state-extension.v1）；未声明返回 None。"""
+        block = self.payload.get("state_catalog")
+        if block is None:
+            return None
+        from . import states as state_catalog
+        candidate = dict(block)
+        candidate.setdefault("schema", "lstest.state-extension.v1")
+        candidate.setdefault("profile_id", self.profile_id)
+        return state_catalog.validate_extension(candidate)
 
     @staticmethod
     def _validate_event_rules(payload: Mapping[str, Any]) -> None:

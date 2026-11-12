@@ -1,0 +1,50 @@
+time: 2026-11-12 10:00:00.000
+level: INFO
+event: TASK_START
+task_id: state-catalog-smoke
+round: -
+case_id: -
+phase: dev
+source: state_catalog_smoke.py
+device: USB\VID_CAFE&PID_0010
+port_role: COM4/csk
+action_id: -
+broadcast_id: -
+correlation_id: -
+status: PASS
+reason: -
+attempt: -
+max_attempts: -
+elapsed_ms: -
+rule_id: -
+expected: {"mode": "smoke", "target_rounds": 1}
+actual: {"mode": "smoke", "target_rounds": 1}
+raw: {"boot_raw": "[2026-01-01 00:00:01.000][O] system ready", "wake_raw": "[2026-01-01 00:00:02.000][S] Pre Wakeup: {\"ncm\":871,\"ncmThreshold\":800,\"keyword\":\"kw\",\"bMain\":1}", "start_raw": "[2026-01-01 00:00:02.500][S] start player", "complete_raw": "[2026-01-01 00:00:03.000][S] Refresh PA to OFF", "stdout_stderr": "[2026-01-01 00:00:03.500] flash.setloglev 4 success\n[2026-01-01 00:00:03.600] vendor_magic_line 0x1f"}
+normalized: -
+handling: -
+evidence: {"path": "serial_logs/COM4.log", "line": 12}
+message: 设备状态目录 golden 样本
+details: {"profile_id": "state-catalog-demo"}
+
+time: 2026-11-12 10:00:04.000
+level: INFO
+event: ROUND_RESULT
+task_id: state-catalog-smoke
+round: 1
+case_id: wake-0001
+phase: round_end
+source: state_catalog_smoke.py
+status: PASS
+reason: -
+attempt: 1
+max_attempts: 1
+elapsed_ms: 3000
+rule_id: wake-once
+expected: {"wake": true}
+actual: {"wake": true, "attempts_total": 1, "first_success_attempt": 1}
+raw: -
+normalized: -
+handling: stop_round
+evidence: {"path": "serial_logs/COM4.log", "line": 18}
+message: 单轮唤醒成功
+details: -

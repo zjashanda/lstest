@@ -1,0 +1,9 @@
+{
+  "schema": "lstest.state-extension.v1",
+  "profile_id": "profile-b-online",
+  "enabled_markers": ["wakeupttskw", "onlineasrkw", "onlinettskw", "onlineskillkw"],
+  "not_applicable": ["local_asr"],
+  "states": [],
+  "aliases": [],
+  "gate": {"required_states": ["ONLINE_ASR_TEXT", "ONLINE_SKILL_TEXT"], "max_unrecovered_blocking": 0}
+}

@@ -1,0 +1,26 @@
+{
+  "_comment": "项目 A（离线、部分能力）：只声明本机真实出现的 3 个 marker；没有在线能力，不补在线状态。",
+  "markers": [
+    {
+      "source": "wake_raw",
+      "code": "WAKE_KEYWORD",
+      "pattern": ".*wakeup_callback, keyword: (?P<keyword>.*)",
+      "message": "唤醒关键词回调",
+      "display": {"category": "唤醒", "fields": ["keyword", "zh"]}
+    },
+    {
+      "source": "asr_raw",
+      "code": "ASR_KEYWORD",
+      "pattern": ".*keyword:(?P<text>.*)",
+      "message": "本地 ASR 结果",
+      "display": {"category": "asr", "primary": "text", "fields": ["zh"]}
+    },
+    {
+      "source": "tts_raw",
+      "code": "TTS_PLAY_ID",
+      "pattern": ".*play id : (?P<tts_id>.*)",
+      "message": "播放标识",
+      "display": {"category": "tts", "fields": ["tts_id", "addr"], "stage": "play"}
+    }
+  ]
+}
