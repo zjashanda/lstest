@@ -25,6 +25,7 @@
 - `references/result-log-standard.md`
 - `references/scenario-api.md`
 - `references/structured-event-log-v2.md`
+- `references/node-integration.md`
 - `requirements.txt`
 - `scripts/__init__.py`
 - `scripts/adapter_guard.py`
@@ -202,3 +203,5 @@ PYTHONPATH=. python -m unittest discover -s lstest/tests -t .
 - [references/result-log-standard.md](references/result-log-standard.md)
 - [references/project-adaptation-standard.md](references/project-adaptation-standard.md)
 - [references/acceptance.md](references/acceptance.md)
+- [references/structured-event-log-v2.md](references/structured-event-log-v2.md)
+- [references/node-integration.md](references/node-integration.md)

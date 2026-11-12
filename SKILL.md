@@ -171,5 +171,6 @@ python -u lstest/scripts/lstest.py eventlog verify --run-dir <结果目录> [--c
 - [references/scenario-api.md](references/scenario-api.md)
 - [references/result-log-standard.md](references/result-log-standard.md)
 - [references/structured-event-log-v2.md](references/structured-event-log-v2.md)
+- [references/node-integration.md](references/node-integration.md)
 - [references/project-adaptation-standard.md](references/project-adaptation-standard.md)
 - [references/acceptance.md](references/acceptance.md)

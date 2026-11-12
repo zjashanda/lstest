@@ -23,3 +23,4 @@
 18. 旧 29 字段平铺日志可被 `eventlog build` 迁移：容错 CRLF/BOM/缺空行/多行 JSON/`-`/缺字段/中文/Windows 路径/超大 raw；`--markers` 派生 DEVICE 事件；迁移不修改源文件。
 19. `eventlog verify` 对 seq、时间格式、summary 重算、`tool.log` 重算与单行语法、gate 冲突、绝对路径、sha256 全部检查通过；`ToolLogValidator.validate_run` 能按 v1/v2 分流。
 20. 串口原始日志每行前缀为 host 接收毫秒时间，设备自身时钟保留在原文；`tool.log` 对应行可附 `device_ts`。
+21. 节点接入按 `references/node-integration.md` 五步完成：结构化运行产出四件套、`TASK_END` 写 gate、`eventlog verify --check-files` 为 `ERROR=0`；未完成前只能报 `NEEDS_REVIEW`，不得宣称真机验证。
