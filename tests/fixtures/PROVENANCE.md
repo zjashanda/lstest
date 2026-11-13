@@ -51,3 +51,16 @@ python -m lstest.scripts.lstest eventlog verify --run-dir /tmp/v2-check
 期望：`test_outcome=PASS`、`delivery_status=DELIVERY_INCOMPLETE`、
 `final_status=NEEDS_REVIEW`、`round_success_rate=100.0`、`first_attempt_success_rate=0.0`、
 尝试分布第 2 次 = 10 轮。
+
+## 结果目录布局 fixture（NOAH-71）
+
+| 项 | 值 |
+|---|---|
+| 目录 | `tests/fixtures/legacy_layout_screenshot/` |
+| 来源 | 用户截图中的旧结果目录列表（根目录多个 JSON + `serial_logs/` + `raw/` + `cloud_run/` + `recorder/` + `milestones/`） |
+| 内容 | `preflight.json`、`status.json`、`validator.json`、`evidence_summary.json`、`finalize.json`、`rounds.jsonl`、`serial_logs/`、`raw/`、`cloud_run/`、`recorder/`、`milestones/stage-index.json` |
+| 数据 | 全部为脱敏样例值（COM 口、round 状态、时间戳），不含设备数据、账号、内网地址或凭据 |
+| 用途 | 与 `legacy_flat_v1_smoke10` 生成的 v2 bundle 合并，复现"根目录 JSON 散落"的真实布局，验证审计/迁移/resolver/validator |
+
+`raw/e0999_SCREENSHOT_SAMPLE.json`、`recorder/round1.pcm` 只是路径形态样本，
+不是真实录音或设备抓包；不使用真实设备证据。

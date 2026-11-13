@@ -29,8 +29,10 @@ from typing import Any, Iterable, Mapping, Sequence
 
 try:  # 包内导入；直接执行 scripts/*.py 时退化为同目录导入
     from . import states as state_catalog
+    from . import result_layout
 except ImportError:  # pragma: no cover - 直接执行回退
     import states as state_catalog  # type: ignore
+    import result_layout  # type: ignore
 
 BEIJING = timezone(timedelta(hours=8))
 
@@ -481,21 +483,25 @@ def parse_legacy_file(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
 # ---------------------------------------------------------------------------
 
 class EventLogWriter:
-    """v2 写入器：框架侧唯一写入口，适配器不得自行拼 JSONL。
+    """v2 事件写入器：框架侧唯一写入口，适配器不得自行拼 JSONL。
 
-    ``run_dir`` 下生成 ``events.jsonl`` 与 ``raw/``；``finalize()`` 再生成
-    ``tool.log``、``summary.md``、``summary.json``。写入即 flush+fsync，
-    标准证据（含崩溃中断）不会因为进程退出而丢失。
+    默认按结果布局 v3 落盘：``events/events.jsonl`` 与 ``evidence/raw/``；
+    ``finalize()`` 再生成 ``events/tool.log``、``summary.md``、``reports/summary.json``
+    与根目录 ``README.md``/``manifest.json``。``layout="v2"`` 保持旧根目录布局。
+    写入即 flush+fsync，标准证据（含崩溃中断）不会因为进程退出而丢失。
     """
 
-    def __init__(self, run_dir: Path, task_id: str, *, raw_min_bytes: int = 0, fsync: bool = True):
+    def __init__(self, run_dir: Path, task_id: str, *, raw_min_bytes: int = 0,
+                 fsync: bool = True, layout: str = result_layout.LAYOUT_V3):
         self.run_dir = Path(run_dir)
+        self.layout = layout
         self.run_dir.mkdir(parents=True, exist_ok=True)
-        self.raw_dir = self.run_dir / "raw"
+        self.raw_dir = result_layout.path(self.run_dir, "raw_dir", layout)
         self.task_id = task_id
         self.raw_min_bytes = raw_min_bytes
         self.fsync = fsync
-        self.events_path = self.run_dir / "events.jsonl"
+        self.events_path = result_layout.path(self.run_dir, "events", layout)
+        self.events_path.parent.mkdir(parents=True, exist_ok=True)
         self._handle = self.events_path.open("w", encoding="utf-8", newline="\n")
         self._seq = 0
         self._closed = False
@@ -529,12 +535,12 @@ class EventLogWriter:
         payload = json.dumps(raw, ensure_ascii=False, indent=2, sort_keys=True, default=str).encode("utf-8")
         if len(payload) < self.raw_min_bytes:
             return {}
-        self.raw_dir.mkdir(exist_ok=True)
+        self.raw_dir.mkdir(parents=True, exist_ok=True)
         name = f"e{record.event_seq:04d}_{record.event}.json"
         target = self.raw_dir / name
         target.write_bytes(payload)
         return {
-            "path": f"raw/{name}",
+            "path": f"{self.raw_dir.relative_to(self.run_dir).as_posix()}/{name}",
             "sha256": sha256_bytes(payload),
             "bytes": len(payload),
             "lines": payload.count(b"\n") + (0 if payload.endswith(b"\n") else 1),
@@ -551,7 +557,7 @@ class EventLogWriter:
         self.close()
         records = read_events(self.events_path)
         return write_bundle(records, self.run_dir, meta=meta, events_path=self.events_path,
-                            extension=extension)
+                            extension=extension, layout=self.layout)
 
 
 def write_event_records(records: Sequence[EventRecord], path: Path) -> int:
@@ -624,8 +630,9 @@ def import_legacy_log(
     meta: Mapping[str, Any] | None = None,
     markers: Mapping[str, Any] | str | Path | None = None,
     extension: "state_catalog.StateExtension | None" = None,
+    layout: str = result_layout.LAYOUT_V3,
 ) -> dict[str, Any]:
-    """旧平铺块日志 → v2 三层产物；不改动源文件，不联网。
+    """旧平铺块日志 → v2 事件 + v3 结果目录；不改动源文件，不联网。
 
     ``markers`` 是项目提供的设备 marker 表（见 ``references/structured-event-log-v2.md``）；
     提供后会把 raw 中的设备状态派生成独立 DEVICE 事件，与 TOOL 事件同一毫秒时序。
@@ -651,7 +658,7 @@ def import_legacy_log(
         extension=extension,
     )
     records = _sort_records(records + device_events)
-    writer = EventLogWriter(out_dir, task)
+    writer = EventLogWriter(out_dir, task, layout=layout)
     try:
         for record in records:
             payload = record.to_dict()
@@ -1168,8 +1175,12 @@ def _pick(container: Mapping[str, Any] | None, names: Iterable[str]) -> Any:
 
 def _evidence_index(records: Sequence[EventRecord]) -> list[dict[str, Any]]:
     purpose = (
+        ("logs/serial/", "设备串口原始证据"),
         ("serial_logs/", "设备串口原始证据"),
+        ("execution_logs/", "执行日志"),
+        ("evidence/raw/", "外置 raw 证据"),
         ("raw/", "外置 raw 证据"),
+        ("reports/", "机器报告"),
         ("recoder/", "本轮录音"),
         ("recorder/", "本轮录音"),
         (".pcm", "本轮录音"),
@@ -2494,7 +2505,10 @@ def render_summary_md(summary: Mapping[str, Any]) -> str:
             f"{','.join(str(value) for value in item.get('lines') or []) or '-'} | {_md(item.get('sha256'))} |"
         )
     lines.append("")
-    lines.append(f"事件机器真源：`events.jsonl`（{meta.get('events_count')} 条，schema `{EVENT_SCHEMA}`）。")
+    lines.append(
+        f"事件机器真源：`events/events.jsonl`（v3）或 `events.jsonl`（v2），"
+        f"{meta.get('events_count')} 条，schema `{EVENT_SCHEMA}`。"
+    )
     lines.append("")
     return "\n".join(lines)
 
@@ -2519,25 +2533,39 @@ def _round_line(item: Mapping[str, Any]) -> str:
 def write_bundle(records: Sequence[EventRecord], out_dir: Path, *,
                  meta: Mapping[str, Any] | None = None,
                  events_path: Path | None = None,
-                 extension: "state_catalog.StateExtension | None" = None) -> dict[str, Any]:
+                 extension: "state_catalog.StateExtension | None" = None,
+                 layout: str | None = None) -> dict[str, Any]:
     """写 tool.log / summary.md / summary.json；返回落盘的 summary。
 
+    ``layout`` 决定产物位置：v3 为 ``events/tool.log`` + ``reports/summary.json``，
+    v2 为旧根目录。未指定时按目录现状识别（空目录按 v3）。
     ``tool.log`` 是完整动作审计（每个事件一行），不是摘要；结论只存在于 summary。
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     records = list(records)
-    events = Path(events_path) if events_path else out_dir / "events.jsonl"
+    if layout is None:
+        layout = result_layout.detect_layout(out_dir)
+        if layout == result_layout.LAYOUT_V1:
+            layout = result_layout.LAYOUT_V3
+    events = Path(events_path) if events_path else result_layout.path(out_dir, "events", layout)
     context = dict(meta or {})
     if events.is_file():
         context.setdefault("events_sha256", sha256_file(events))
     summary = summarize(records, meta=context, extension=extension)
     payload = public_summary(summary)
-    (out_dir / "summary.json").write_text(
+    summary_target = result_layout.path(out_dir, "summary_json", layout)
+    summary_target.parent.mkdir(parents=True, exist_ok=True)
+    summary_target.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     (out_dir / "summary.md").write_text(render_summary_md(summary), encoding="utf-8")
-    (out_dir / "tool.log").write_text(render_tool_log(summary, records), encoding="utf-8")
+    tool_target = result_layout.path(out_dir, "tool_log", layout)
+    tool_target.parent.mkdir(parents=True, exist_ok=True)
+    tool_target.write_text(render_tool_log(summary, records), encoding="utf-8")
+    if layout == result_layout.LAYOUT_V3:
+        result_layout.write_readme(out_dir, task_id=summary.get("task_id"))
+        result_layout.write_manifest(out_dir, task_id=summary.get("task_id"))
     return payload
 
 
@@ -2551,10 +2579,26 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False,
     def add(code: str, level: str, message: str) -> None:
         findings.append({"code": code, "level": level, "message": message})
 
-    events_path = run_dir / "events.jsonl"
-    if not events_path.is_file():
-        add("MISSING_EVENTS", "ERROR", "缺少 events.jsonl")
+    layout = result_layout.detect_layout(run_dir)
+    events_found = result_layout.resolve(run_dir, "events")
+    if events_found is None:
+        add("MISSING_EVENTS", "ERROR",
+            "缺少 events.jsonl（v3: events/events.jsonl；v2: 根目录 events.jsonl）")
         return findings
+    events_path = events_found
+    if layout != result_layout.LAYOUT_V3:
+        add("LAYOUT_LEGACY", "WARN",
+            f"旧结果布局 {layout}：可读，建议用 `lstest.py result migrate` 迁移到 v3")
+    else:
+        report = result_layout.audit(run_dir)
+        for item in report["violations"]:
+            # v3 目录内根目录仍散落旧 JSON/日志即违反交付契约；旧布局目录只告警。
+            add("LAYOUT_VIOLATION", "ERROR",
+                f"根目录存在 {item['reason']} 项 {item['name']}；建议：{item['suggestion']}")
+        for rel in report["missing"]:
+            add("LAYOUT_MISSING", "ERROR", f"v3 布局缺少 {rel}")
+        for item in result_layout.verify_manifest(run_dir):
+            add(item["code"], item["level"], item["message"])
     try:
         records = read_events(events_path)
     except LegacyFormatError as error:
@@ -2581,22 +2625,22 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False,
             if ABS_WIN_RE.match(path) or ABS_POSIX_RE.search(path):
                 add("ABS_PATH", "ERROR", f"event_seq={record.event_seq} 证据含绝对路径: {path}")
             if check_files:
-                target = run_dir / path
-                if not target.is_file():
+                target = result_layout.resolve_relative(run_dir, path)
+                if target is None or not target.is_file():
                     add("MISSING_EVIDENCE", "WARN", f"证据文件不存在: {path}")
                 elif ref.get("sha256"):
                     if sha256_file(target) != str(ref["sha256"]).lower():
                         add("EVIDENCE_SHA", "ERROR", f"证据 SHA-256 不匹配: {path}")
         if record.raw_ref and record.raw_ref.get("path"):
-            target = run_dir / record.raw_ref["path"]
-            if not target.is_file():
+            target = result_layout.resolve_relative(run_dir, record.raw_ref["path"])
+            if target is None or not target.is_file():
                 add("MISSING_RAW", "ERROR", f"raw 引用不存在: {record.raw_ref['path']}")
             elif record.raw_ref.get("sha256") and sha256_file(target) != record.raw_ref["sha256"]:
                 add("RAW_SHA", "ERROR", f"raw SHA-256 不匹配: {record.raw_ref['path']}")
 
-    summary_path = run_dir / "summary.json"
-    if not summary_path.is_file():
-        add("MISSING_SUMMARY", "ERROR", "缺少 summary.json")
+    summary_path = result_layout.resolve(run_dir, "summary_json")
+    if summary_path is None or not summary_path.is_file():
+        add("MISSING_SUMMARY", "ERROR", "缺少 summary.json（v3: reports/summary.json）")
         return findings
     try:
         stored = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -2604,9 +2648,11 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False,
         add("BAD_SUMMARY", "ERROR", f"summary.json 不是合法 JSON: {error}")
         return findings
 
-    for name in ("tool.log", "summary.md"):
-        if not (run_dir / name).is_file():
-            add("MISSING_OUTPUT", "ERROR", f"缺少 {name}")
+    tool_log_path = result_layout.resolve(run_dir, "tool_log")
+    if tool_log_path is None:
+        add("MISSING_OUTPUT", "ERROR", "缺少 tool.log（v3: events/tool.log）")
+    if not (run_dir / "summary.md").is_file():
+        add("MISSING_OUTPUT", "ERROR", "缺少 summary.md")
 
     regenerated = summarize(records, meta={
         "title": (stored.get("meta") or {}).get("title"),
@@ -2635,8 +2681,8 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False,
     if stored.get("task_id") != expected.get("task_id"):
         add("SUMMARY_DRIFT", "WARN", "summary.json task_id 与事件重算不一致")
 
-    if (run_dir / "tool.log").is_file():
-        tool_log = (run_dir / "tool.log").read_text(encoding="utf-8")
+    if tool_log_path is not None and tool_log_path.is_file():
+        tool_log = tool_log_path.read_text(encoding="utf-8")
         display_format = ("unified" if str((stored.get("meta") or {}).get("display_format", "")).startswith("unified")
                           else "legacy")
         rendered = render_tool_log(regenerated, records, display_format=display_format)
@@ -2656,10 +2702,9 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False,
     if failures:
         add("SOURCE_FAILURE_EVENTS", "WARN", f"源日志含 {len(failures)} 条失败状态事件")
 
-    for name in ("events.jsonl", "tool.log", "summary.md", "summary.json"):
-        path = run_dir / name
-        if not path.is_file():
-            continue
+    scan_targets = [events_path, tool_log_path, run_dir / "summary.md", summary_path]
+    for path in [item for item in scan_targets if item is not None and item.is_file()]:
+        name = path.relative_to(run_dir).as_posix() if path.is_relative_to(run_dir) else path.name
         text = path.read_text(encoding="utf-8", errors="replace")
         if ABS_WIN_RE.search(text):
             add("ABS_PATH", "ERROR", f"{name} 含 Windows 绝对路径")
@@ -2718,10 +2763,14 @@ def schema_document() -> dict[str, Any]:
         "final_status": list(FINAL_STATUS_VALUES),
         "artifact_gate_checks": sorted(ARTIFACT_GATE_CHECKS),
         "blocking_gate_checks": sorted(BLOCKING_GATE_CHECKS),
-        "raw_externalization": "所有 raw 写入 raw/e<seq>_<EVENT>.json，events 只保留 path/sha256/bytes/lines",
+        "raw_externalization": (
+            "所有 raw 写入 evidence/raw/e<seq>_<EVENT>.json（v3）或 raw/（v2），"
+            "events 只保留 path/sha256/bytes/lines"
+        ),
         "tool_log_rule": "tool.log 每个事件恰好一行，按 host 毫秒排序，含做法/状态/判断/证据，禁止续行与摘要",
         "tool_log_line": "<YYYY-MM-DD HH:MM:SS.mmm> [<范围>][<动作>][<阶段>]([<结果>]) <描述> | k=v | evidence=<路径#行号>",
         "device_rule": "DEVICE 事件与 TOOL 事件同一毫秒时序；连续重复状态合并并记 repeat_count/last_hit",
+        "layout": result_layout.layout_document(),
         "state_catalog": state_catalog.schema_document(),
         "state_rule": (
             "设备状态码必须登记在通用目录或 lstest.state-extension.v1 项目扩展；"

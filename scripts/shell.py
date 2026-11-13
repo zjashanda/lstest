@@ -33,6 +33,11 @@ def _nonnegative_int(rule: Mapping[str, Any], name: str, default: int) -> int:
         return default
 
 
+def _serial_rel_dir(artifacts: Any | None) -> str:
+    """证据引用前缀：v3 为 ``logs/serial``，旧布局为 ``serial_logs``。"""
+    return str(getattr(artifacts, "serial_rel_dir", "") or "serial_logs")
+
+
 class ProfileCommandSender:
     """Send one profile-approved command with observable verification and retry."""
 
@@ -89,7 +94,7 @@ class ProfileCommandSender:
                     role=scope["role"],
                     raw_line=str(getattr(event, "line", "")),
                     reason=";".join(rejected),
-                    evidence=ProfileCommandSender._evidence_refs([event]),
+                    evidence=self._evidence_refs([event]),
                 )
         return matched
 
@@ -112,14 +117,14 @@ class ProfileCommandSender:
         )
         return [item for item in events if self._event_matches(values, item, phase=phase)]
 
-    @staticmethod
-    def _evidence_refs(events: Iterable[Any]) -> list[str]:
+    def _evidence_refs(self, events: Iterable[Any]) -> list[str]:
         refs: list[str] = []
+        prefix = _serial_rel_dir(getattr(self, "artifacts", None))
         for item in events:
             port = str(getattr(item, "port", "unknown"))
             role = str(getattr(item, "role", "unknown"))
             cursor = getattr(item, "cursor", "")
-            refs.append(f"serial_logs/serial_{port}_{role}.log#{cursor}")
+            refs.append(f"{prefix}/serial_{port}_{role}.log#{cursor}")
         return refs
 
     def _blocked_result(
@@ -362,9 +367,8 @@ class ProfileRecoveryStateMachine:
         self.manager = manager
         self.state = "CREATED"
 
-    @staticmethod
-    def _evidence_refs(events: Iterable[Any]) -> list[str]:
-        return ProfileCommandSender._evidence_refs(events)
+    def _evidence_refs(self, events: Iterable[Any]) -> list[str]:
+        return ProfileCommandSender._evidence_refs(self, events)
 
     def _complete(self, result: dict[str, Any]) -> dict[str, Any]:
         level = "INFO" if result["status"] == "PASS" else ("WARN" if result["status"] == "CANCELLED" else "ERROR")
@@ -543,7 +547,7 @@ class ProfileRecoveryStateMachine:
         first_init = init_events[0]
         self.artifacts.emit_fact(
             "INIT_READY", "ready", tag="DEVICE",
-            evidence=ProfileCommandSender._evidence_refs(init_events),
+            evidence=self._evidence_refs(init_events),
             port=getattr(first_init, "port", ""),
             role=getattr(first_init, "role", ""),
             epoch=epoch if epoch is not None else self.artifacts.current_epoch,
@@ -551,7 +555,7 @@ class ProfileRecoveryStateMachine:
         )
         self.artifacts.emit_judgement(
             "初始化", "PASS", tag="RESULT",
-            evidence=ProfileCommandSender._evidence_refs(init_events),
+            evidence=self._evidence_refs(init_events),
         )
 
         recovery = self.profile.recovery if hasattr(self.profile, "recovery") else {}
@@ -568,7 +572,7 @@ class ProfileRecoveryStateMachine:
                 epoch=epoch if epoch is not None else self.artifacts.current_epoch,
                 phase="initialization_recovery",
                 elapsed_ms=round(resolved_stable_for_s * 1000),
-                evidence=ProfileCommandSender._evidence_refs(init_events),
+                evidence=self._evidence_refs(init_events),
             )
             restart_event = self._wait_stable(resolved_stable_for_s, restart_guard)
             if restart_event:
@@ -580,7 +584,7 @@ class ProfileRecoveryStateMachine:
                 "INIT_STABLE",
                 "ready",
                 tag="DEVICE",
-                evidence=ProfileCommandSender._evidence_refs(init_events),
+                evidence=self._evidence_refs(init_events),
                 case_id=case_id,
             )
 
@@ -653,6 +657,9 @@ class ProfileRestartRecoveryMonitor:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
+    def _evidence_refs(self, events: Iterable[Any]) -> list[str]:
+        return ProfileCommandSender._evidence_refs(self, events)
+
     def start(self) -> None:
         if not self.profile.restart_patterns:
             self.artifacts.emit(
@@ -706,7 +713,7 @@ class ProfileRestartRecoveryMonitor:
                 restart_port=getattr(event, "port", ""),
                 restart_role=getattr(event, "role", ""),
                 restart_cursor=getattr(event, "cursor", 0),
-                evidence_refs=ProfileCommandSender._evidence_refs([event]),
+                evidence_refs=self._evidence_refs([event]),
                 epoch=self.epoch,
             )
             def restart_guard() -> Any | None:

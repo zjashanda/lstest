@@ -17,10 +17,12 @@ from typing import Any, Iterable, Mapping, Protocol, Sequence
 try:
     from .eventlog import EventLogWriter, write_device_event
     from .observations import RawTag, ToolJudgement, raw_tags_from_mappings, render_observation
+    from . import result_layout
     from .timeline import TimelineLedger, ToolLogValidator, safe_basename
 except ImportError:  # direct execution fallback
     from eventlog import EventLogWriter, write_device_event
     from observations import RawTag, ToolJudgement, raw_tags_from_mappings, render_observation
+    import result_layout  # type: ignore
     from timeline import TimelineLedger, ToolLogValidator, safe_basename
 
 BEIJING = timezone(timedelta(hours=8))
@@ -319,11 +321,15 @@ class TaskSupervisor:
 class TaskArtifacts:
     """The four-artifact result ledger used by every new lstest task.
 
-    ``serial_logs/`` is the continuous device-side fact source.  ``tool.log``
-    is the single human-readable execution ledger.  ``results.csv`` contains
-    one final row per logical case, and ``cases.csv`` freezes the input order
-    before any device action.  No derived JSON, per-tool log, or summary file
-    is created for new tasks.
+    ``logs/serial/`` (v3) or ``serial_logs/`` (v1) is the continuous
+    device-side fact source.  ``events/tool.log`` (v3) or ``tool.log`` (v1) is
+    the single human-readable execution ledger.  ``reports/results.csv`` (v3)
+    or ``results.csv`` (v1) contains one final row per logical case, and
+    ``reports/cases.csv`` (v3) or ``cases.csv`` (v1) freezes the input order
+    before any device action.
+
+    ``layout=None`` 时：结构化事件任务用 v3，旧四产物任务保持 v1，
+    这样历史适配器与测试不会因为目录整理而改变语义。
     """
 
     TOOL_FIELDS = (
@@ -357,7 +363,11 @@ class TaskArtifacts:
         append: bool = False,
         structured_events: bool = False,
         state_extension: Any | None = None,
+        layout: str | None = None,
     ):
+        self.layout = layout or (
+            result_layout.LAYOUT_V3 if structured_events else result_layout.LAYOUT_V1
+        )
         if run_name:
             self.run_dir = Path(result_root) / run_name
             self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -370,16 +380,30 @@ class TaskArtifacts:
                 candidate = Path(f"{base}_{suffix:02d}")
                 suffix += 1
             self.run_dir = candidate
-        (self.run_dir / "serial_logs").mkdir(parents=True, exist_ok=True)
+        result_layout.ensure_dirs(self.run_dir, self.layout)
         self.task_id = self.run_dir.name
-        self.tool_log_path = self.run_dir / ("tool.live.log" if structured_events else "tool.log")
-        self.results_path = self.run_dir / "results.csv"
-        self.cases_path = self.run_dir / "cases.csv"
-        self.stop = StopSupervisor(self.run_dir / "STOP")
+        if self.layout == result_layout.LAYOUT_V3:
+            self.tool_log_path = result_layout.path(
+                self.run_dir, "tool_live" if structured_events else "tool_log", self.layout
+            )
+        else:
+            self.tool_log_path = self.run_dir / ("tool.live.log" if structured_events else "tool.log")
+        self.tool_log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.serial_rel_dir = result_layout.path(
+            self.run_dir, "serial_dir", self.layout
+        ).relative_to(self.run_dir).as_posix()
+        self.results_path = result_layout.path(self.run_dir, "results", self.layout)
+        self.results_path.parent.mkdir(parents=True, exist_ok=True)
+        self.cases_path = result_layout.path(self.run_dir, "cases", self.layout)
+        self.cases_path.parent.mkdir(parents=True, exist_ok=True)
+        stop_path = result_layout.path(self.run_dir, "stop", self.layout)
+        stop_path.parent.mkdir(parents=True, exist_ok=True)
+        self.stop = StopSupervisor(stop_path)
         self.stop_policy = StopPolicy(self.stop)
         self._lock = threading.RLock()
         self.event_log = (
-            EventLogWriter(self.run_dir, self.task_id, fsync=False) if structured_events else None
+            EventLogWriter(self.run_dir, self.task_id, fsync=False, layout=self.layout)
+            if structured_events else None
         )
         self.state_extension = state_extension
         self._event_log_failed = False
@@ -427,7 +451,10 @@ class TaskArtifacts:
         self._final_summary: dict[str, Any] | None = None
         self.closed = False
         self.timeline.system(
-            f"任务开始: task={task_slug}，结果=serial_logs/、tool.log、results.csv、cases.csv",
+            f"任务开始: task={task_slug}，结果={self.serial_rel_dir}/、"
+            f"{self.tool_log_path.relative_to(self.run_dir).as_posix()}、"
+            f"{self.results_path.relative_to(self.run_dir).as_posix()}、"
+            f"{self.cases_path.relative_to(self.run_dir).as_posix()}",
             epoch=self.current_epoch,
         )
 
@@ -1613,7 +1640,7 @@ class TaskArtifacts:
     def serial_log_path(self, port: str, role: str | None) -> Path:
         safe_port = str(port).replace("/", "_").replace("\\", "_")
         safe_role = str(role or "unknown").replace("/", "_").replace("\\", "_")
-        return self.run_dir / "serial_logs" / f"serial_{safe_port}_{safe_role}.log"
+        return self.run_dir / self.serial_rel_dir / f"serial_{safe_port}_{safe_role}.log"
 
 
 class DeviceRuntime:

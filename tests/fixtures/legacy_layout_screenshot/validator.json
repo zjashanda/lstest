@@ -1,0 +1,5 @@
+{
+  "status": "PASS",
+  "errors": [],
+  "checked": ["tool.log", "events.jsonl", "summary.json"]
+}

@@ -160,10 +160,15 @@ def parser() -> argparse.ArgumentParser:
     build.add_argument("--raw-min-bytes", type=int, default=0, help="raw 外置阈值；0 表示全部外置")
     build.add_argument("--state-extension", type=Path, default=None,
                        help="项目状态扩展 JSON（lstest.state-extension.v1），用于登记 P_ 码与别名")
+    for _layout_cmd in (build,):
+        _layout_cmd.add_argument("--layout", choices=("v3", "v2"), default=None,
+                                 help="产物布局：v3（默认新任务）或 v2（旧根目录布局）")
     render = eventlog_sub.add_parser("render", help="从已有 events.jsonl 重新生成 run.log / summary.md / summary.json")
     render.add_argument("--run-dir", type=Path, required=True)
     render.add_argument("--meta", type=Path, default=None)
     render.add_argument("--state-extension", type=Path, default=None)
+    render.add_argument("--layout", choices=("v3", "v2"), default=None,
+                        help="产物布局：v3（默认）或 v2（旧根目录布局）")
     verify = eventlog_sub.add_parser("verify", help="校验 v2 目录：schema、序号、重算一致、判定冲突、路径泄漏")
     verify.add_argument("--run-dir", type=Path, required=True)
     verify.add_argument("--check-files", action="store_true", help="同时校验证据文件存在与 SHA-256")
@@ -192,6 +197,29 @@ def parser() -> argparse.ArgumentParser:
     state_pcov.add_argument("--observed", default="")
     state_pcov.add_argument("--unparsed", default="")
     state_pcov.add_argument("--output", type=Path, default=None)
+
+    result = sub.add_parser("result", help="结果目录布局 v3：审计、迁移、README 与 manifest")
+    result_sub = result.add_subparsers(dest="result_command", required=True)
+    result_audit = result_sub.add_parser("audit", help="审计根目录越界项与旧布局产物（只读）")
+    result_audit.add_argument("--run-dir", type=Path, required=True)
+    result_audit.add_argument("--json", action="store_true")
+    result_migrate = result_sub.add_parser("migrate", help="把旧布局迁移到 v3；默认 dry-run")
+    result_migrate.add_argument("--run-dir", type=Path, required=True)
+    result_migrate.add_argument("--apply", action="store_true", help="真正执行移动；不覆盖已有目标")
+    result_migrate.add_argument("--task-id", default=None)
+    result_migrate.add_argument("--json", action="store_true")
+    result_readme = result_sub.add_parser("readme", help="生成根目录 README.md（阅读顺序）")
+    result_readme.add_argument("--run-dir", type=Path, required=True)
+    result_readme.add_argument("--task-id", default=None)
+    result_manifest = result_sub.add_parser("manifest", help="生成/刷新根目录 manifest.json")
+    result_manifest.add_argument("--run-dir", type=Path, required=True)
+    result_manifest.add_argument("--task-id", default=None)
+    result_resolve = result_sub.add_parser("resolve", help="解析某个产物/证据引用实际路径（新/旧布局）")
+    result_resolve.add_argument("--run-dir", type=Path, required=True)
+    result_resolve.add_argument("--name", help="逻辑产物名，如 tool_log/events/summary_json")
+    result_resolve.add_argument("--ref", help="事件证据相对引用，如 serial_logs/a.log#12")
+    result_schema = result_sub.add_parser("schema", help="输出布局自描述（供 receipt/ark-archive/ark-kb 解析）")
+    result_schema.add_argument("--output", type=Path, default=None)
 
     pre = sub.add_parser("preflight", help="只检查 profile 和输入，不打开硬件")
     pre.add_argument("--profile", type=Path, required=True)
@@ -249,10 +277,14 @@ def run_eventlog_command(args: argparse.Namespace) -> int:
             raw_min_bytes=args.raw_min_bytes, meta=meta,
             markers=getattr(args, "markers", None),
             extension=extension,
+            layout=getattr(args, "layout", None) or "v3",
         )
     elif args.eventlog_command == "render":
-        records = eventlog.read_events(args.run_dir / "events.jsonl")
-        summary = eventlog.write_bundle(records, args.run_dir, meta=meta, extension=extension)
+        records = eventlog.read_events(
+            eventlog.result_layout.resolve_required(args.run_dir, "events")
+        )
+        summary = eventlog.write_bundle(records, args.run_dir, meta=meta, extension=extension,
+                                        layout=getattr(args, "layout", None))
     elif args.eventlog_command == "verify":
         findings = eventlog.verify_bundle(
             args.run_dir, check_files=args.check_files,
@@ -363,6 +395,61 @@ def run_state_command(args: argparse.Namespace) -> int:
     ])
 
 
+def run_result_command(args: argparse.Namespace) -> int:
+    """结果目录布局：只动文件位置与说明，不打开设备、不删除证据。"""
+    try:
+        from . import result_layout
+    except ImportError:  # pragma: no cover - 直接执行回退
+        import result_layout  # type: ignore
+    run_dir = getattr(args, "run_dir", None)
+    if args.result_command == "audit":
+        payload = result_layout.audit(run_dir)
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if payload["root_ok"] else 1
+    if args.result_command == "migrate":
+        payload = result_layout.migrate(run_dir, apply=args.apply, task_id=args.task_id)
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if payload.get("ok") else 1
+    if args.result_command == "readme":
+        target = result_layout.write_readme(run_dir, task_id=args.task_id)
+        print(str(target))
+        return 0
+    if args.result_command == "manifest":
+        target = result_layout.write_manifest(run_dir, task_id=args.task_id)
+        print(str(target))
+        return 0
+    if args.result_command == "schema":
+        payload = result_layout.layout_document()
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+        if getattr(args, "output", None):
+            args.output.write_text(text + "\n", encoding="utf-8")
+            print(str(args.output))
+        else:
+            print(text)
+        return 0
+    if getattr(args, "ref", None):
+        found = result_layout.resolve_relative(run_dir, args.ref)
+        print(json.dumps({
+            "ref": args.ref,
+            "normalized": result_layout.normalize_reference(args.ref),
+            "path": str(found) if found is not None else None,
+            "exists": found is not None,
+        }, ensure_ascii=False, indent=2))
+        return 0 if found is not None else 3
+    if not getattr(args, "name", None):
+        print(json.dumps({"status": "USAGE", "reason": "需要 --name 或 --ref"}, ensure_ascii=False),
+              file=sys.stderr)
+        return 2
+    found = result_layout.resolve(run_dir, args.name)
+    print(json.dumps({
+        "name": args.name,
+        "canonical": result_layout.ENTRIES[args.name].rel,
+        "path": str(found) if found is not None else None,
+        "exists": found is not None,
+    }, ensure_ascii=False, indent=2))
+    return 0 if found is not None else 3
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if args.command == "list":
@@ -372,6 +459,7 @@ def main(argv: list[str] | None = None) -> int:
                 "dynamic-serial", "profile", "evidence", "basic-smoke", "safe-stop",
                 "indextts-tts", "audio-device-scan", "laid-installer", "device-key-playback",
                 "structured-event-log-v2",
+                "result-layout-v3",
                 "state-catalog",
             ],
         }
@@ -380,6 +468,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "eventlog":
             return run_eventlog_command(args)
+        if args.command == "result":
+            return run_result_command(args)
         if args.command == "state":
             return run_state_command(args)
         if args.command == "tts":

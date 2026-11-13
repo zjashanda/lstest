@@ -1,0 +1,6 @@
+{
+  "status": "PASS",
+  "profile_id": "venusws63",
+  "ports": [{"role": "ap", "port": "COM5", "baudrate": 921600}],
+  "checked_at": "2026-11-12 17:01:40"
+}
