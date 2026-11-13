@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lstest.scripts import eventlog, profile, states
+from lstest.scripts import eventlog, result_layout, profile, states
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SMOKE = FIXTURES / "state_catalog_smoke.txt"
@@ -170,7 +170,7 @@ class DeriveAndWriteTests(unittest.TestCase):
                 SMOKE, out, meta=json.loads(SMOKE_META.read_text(encoding="utf-8")),
                 markers=SMOKE_MARKERS, extension=extension,
             )
-            records = eventlog.read_events(out / "events.jsonl")
+            records = eventlog.read_events(result_layout.resolve_required(out, "events"))
             by_code = {}
             for record in records:
                 by_code.setdefault(record.event, []).append(record)
@@ -189,7 +189,7 @@ class DeriveAndWriteTests(unittest.TestCase):
             self.assertFalse(summary["gate"]["gate_pass"])
             self.assertIn("no_unrecovered_blocking", summary["gate"]["failed_checks"])
             self.assertNotEqual(summary["final_status"], "PASS")
-            lines = (out / "tool.log").read_text(encoding="utf-8").splitlines()
+            lines = result_layout.resolve_required(out, "tool_log").read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), len(records))
             self.assertIn("[DEVICE] 未识别设备状态：", "\n".join(lines))
             for forbidden in ("raw_marker=", "catalog_status=", "raw_code=", "rule="):
@@ -371,8 +371,8 @@ class TwoProfileDisplayTests(unittest.TestCase):
                 FIXTURES / f"{name}.txt", out, meta={},
                 markers=FIXTURES / f"{name}.markers.json", extension=extension,
             )
-            records = eventlog.read_events(out / "events.jsonl")
-            tool_log = (out / "tool.log").read_text(encoding="utf-8")
+            records = eventlog.read_events(result_layout.resolve_required(out, "events"))
+            tool_log = result_layout.resolve_required(out, "tool_log").read_text(encoding="utf-8")
             findings = eventlog.verify_bundle(out, extension=extension)
         codes = [record.event for record in records]
         return extension, codes, tool_log, findings, summary

@@ -15,7 +15,7 @@ import time
 import unittest
 from pathlib import Path
 
-from lstest.scripts import eventlog
+from lstest.scripts import eventlog, result_layout
 from lstest.scripts.core import ConnectionSpec, TaskArtifacts
 from lstest.scripts.serial_capture import SerialManager
 
@@ -41,11 +41,15 @@ def build_golden(target: Path) -> dict:
 
 
 def records_of(target: Path) -> list[eventlog.EventRecord]:
-    return eventlog.read_events(Path(target) / "events.jsonl")
+    return eventlog.read_events(result_layout.resolve_required(target, "events"))
 
 
 def tool_lines(target: Path) -> list[str]:
-    return (Path(target) / "tool.log").read_text(encoding="utf-8").splitlines()
+    return result_layout.resolve_required(target, "tool_log").read_text(encoding="utf-8").splitlines()
+
+
+def summary_json(target: Path) -> Path:
+    return result_layout.resolve_required(target, "summary_json")
 
 
 class GoldenLogTests(unittest.TestCase):
@@ -164,16 +168,16 @@ class GoldenLogTests(unittest.TestCase):
         self.assertIn("首轮稳定性缺口 100.0 个百分点", text)
 
     def test_rerender_is_byte_identical(self) -> None:
-        before_log = (self.run_dir / "tool.log").read_bytes()
+        before_log = result_layout.resolve_required(self.run_dir, "tool_log").read_bytes()
         before_md = (self.run_dir / "summary.md").read_bytes()
-        summary = json.loads((self.run_dir / "summary.json").read_text(encoding="utf-8"))
+        summary = json.loads(summary_json(self.run_dir).read_text(encoding="utf-8"))
         records = records_of(self.run_dir)
         eventlog.write_bundle(records, self.run_dir, meta={
             "title": summary["meta"]["title"],
             "purpose": summary["meta"]["purpose"],
             "scope": summary["meta"]["scope"],
         })
-        self.assertEqual((self.run_dir / "tool.log").read_bytes(), before_log)
+        self.assertEqual(result_layout.resolve_required(self.run_dir, "tool_log").read_bytes(), before_log)
         self.assertEqual((self.run_dir / "summary.md").read_bytes(), before_md)
 
     def test_verify_passes_and_detects_drift(self) -> None:
@@ -181,7 +185,7 @@ class GoldenLogTests(unittest.TestCase):
         self.assertEqual([item for item in findings if item["level"] == "ERROR"], [])
         self.assertTrue(any(item["code"] == "SOURCE_STATUS_CONFLICT" for item in findings))
 
-        log_path = self.run_dir / "tool.log"
+        log_path = result_layout.resolve_required(self.run_dir, "tool_log")
         original = log_path.read_text(encoding="utf-8")
         log_path.write_text(original + "2026-11-12 17:07:10.000 [TASK][RUN][EVENT] 手工追加\n", encoding="utf-8")
         codes = {item["code"] for item in eventlog.verify_bundle(self.run_dir)}
@@ -191,7 +195,7 @@ class GoldenLogTests(unittest.TestCase):
         self.assertTrue({"TOOL_LOG_DRIFT", "TOOL_LOG_FORMAT"} & codes)
         log_path.write_text(original, encoding="utf-8")
 
-        summary_path = self.run_dir / "summary.json"
+        summary_path = summary_json(self.run_dir)
         payload = json.loads(summary_path.read_text(encoding="utf-8"))
         payload["rates"]["first_attempt_success_rate"] = 100.0
         summary_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -262,7 +266,7 @@ class ToolLogUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             eventlog.write_event_records(events, run_dir / "events.jsonl")
-            eventlog.write_bundle(eventlog.read_events(run_dir / "events.jsonl"), run_dir)
+            eventlog.write_bundle(eventlog.read_events(run_dir / "events.jsonl"), run_dir, layout="v2")
             lines = tool_lines(run_dir)
         self.assertEqual(len(lines), 2)
         self.assertIn("[DEVICE] 启动：boot", lines[0])
@@ -370,10 +374,10 @@ class LegacyCompatibilityTests(unittest.TestCase):
             writer = eventlog.EventLogWriter(run_dir, "t1")
             writer.emit("EXTERNAL_TOOL_OUTPUT", raw={"output": blob}, status="PASS")
             writer.close()
-            payload = (run_dir / "events.jsonl").read_text(encoding="utf-8")
+            payload = result_layout.resolve_required(run_dir, "events").read_text(encoding="utf-8")
             self.assertLess(len(payload.splitlines()[0]), 1200)
             self.assertNotIn(blob, payload)
-            record = eventlog.read_events(run_dir / "events.jsonl")[0]
+            record = eventlog.read_events(result_layout.resolve_required(run_dir, "events"))[0]
             self.assertGreater(record.raw_ref["bytes"], 50000)
             self.assertTrue((run_dir / record.raw_ref["path"]).is_file())
 
@@ -388,7 +392,10 @@ class VerdictRuleTests(unittest.TestCase):
                 name = payload.pop("event")
                 writer.emit(name, **payload)
             writer.close()
-            return eventlog.write_bundle(eventlog.read_events(run_dir / "events.jsonl"), run_dir, meta=meta or {})
+            return eventlog.write_bundle(
+                eventlog.read_events(result_layout.resolve_required(run_dir, "events")),
+                run_dir, meta=meta or {},
+            )
 
     def _round(self, number: int, status: str = "PASS", attempts: int = 1) -> dict:
         return {
@@ -498,16 +505,18 @@ class TaskArtifactsIntegrationTests(unittest.TestCase):
                            actual={"gate": {"gate_pass": True, "checks": {}}})
             artifacts.finalize("PASS", "fixture")
             run_dir = artifacts.run_dir
-            self.assertTrue((run_dir / "events.jsonl").is_file())
-            self.assertTrue((run_dir / "tool.log").is_file())
-            self.assertTrue((run_dir / "tool.live.log").is_file())
+            self.assertTrue(result_layout.resolve_required(run_dir, "events").is_file())
+            self.assertTrue(result_layout.resolve_required(run_dir, "tool_log").is_file())
+            self.assertTrue(result_layout.resolve_required(run_dir, "tool_live").is_file())
             self.assertTrue((run_dir / "summary.md").is_file())
-            summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+            self.assertTrue((run_dir / "README.md").is_file())
+            self.assertTrue((run_dir / "manifest.json").is_file())
+            summary = json.loads(summary_json(run_dir).read_text(encoding="utf-8"))
             self.assertEqual(summary["rates"]["round_success_rate"], 100.0)
             self.assertEqual(summary["final_status"], "PASS")
             self.assertEqual(eventlog.verify_bundle(run_dir), [])
             lines = tool_lines(run_dir)
-            self.assertEqual(len(lines), json.loads((run_dir / "summary.json").read_text())["meta"]["events_count"])
+            self.assertEqual(len(lines), json.loads(summary_json(run_dir).read_text())["meta"]["events_count"])
 
     def test_structured_events_off_keeps_v1_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -553,7 +562,7 @@ class TimeContractLintTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             structured = TaskArtifacts(Path(tmp), "ms", structured_events=True)
             structured.finalize("PASS", "fixture")
-            lines = (structured.run_dir / "tool.live.log").read_text(encoding="utf-8").splitlines()
+            lines = result_layout.resolve_required(structured.run_dir, "tool_live").read_text(encoding="utf-8").splitlines()
             self.assertTrue(lines)
             self.assertRegex(lines[0][:23], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$")
 
@@ -583,7 +592,10 @@ class RedactionTests(unittest.TestCase):
             FIXTURES / "legacy_flat_v1_smoke10.meta.json",
             FIXTURES / "legacy_flat_v1_smoke10.markers.json",
             root / "references" / "structured-event-log-v2.md",
+            root / "references" / "result-layout-v3.md",
+            root / "references" / "result-log-standard.md",
             root / "scripts" / "eventlog.py",
+            root / "scripts" / "result_layout.py",
         ]
         for path in targets:
             text = path.read_text(encoding="utf-8")
@@ -657,7 +669,7 @@ class DeviceCoverageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
             eventlog.write_event_records(records, run_dir / "events.jsonl")
-            eventlog.write_bundle(eventlog.read_events(run_dir / "events.jsonl"), run_dir)
+            eventlog.write_bundle(eventlog.read_events(run_dir / "events.jsonl"), run_dir, layout="v2")
             lines = tool_lines(run_dir)
         self.assertIn("[DEVICE] 启动：boot", lines[0])
         self.assertIn("[DEVICE] 就绪：ready", lines[1])

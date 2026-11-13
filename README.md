@@ -109,7 +109,8 @@ Then restart Codex or OpenCode.
 - profile 的 `presentation_capture` 是唯一展示值。`tool.log` 只显示 `KEY: 原始捕获值`，不显示正则、规则 ID、捕获字段名、内部关联 ID 或绝对路径。
 - 播放器原始 marker 必须原样显示。`state_class` 仅供去重、窗口和耗时计算，绝不能改写显示文本。
 - 每个活动 case 中到达的事实都立即按顺序显示，包括播报前与异常后；每轮只有一次 `[RESULT]`。必需而缺失的事实在轮末以空值行补齐。
-- v1 结果目录仅保留 `serial_logs/*.log`、`tool.log`、`results.csv`、`cases.csv`；v2 增加 `events.jsonl`、`raw/`、`summary.md`、`summary.json`，`tool.log` 为完整动作审计（每事件一行、毫秒、TOOL+DEVICE）。禁止 `.bin`、`task.log`、`tool_logs` 和临时结果文件。
+- v1 结果目录仅保留 `serial_logs/*.log`、`tool.log`、`results.csv`、`cases.csv`；v2 增加 `events.jsonl`、`raw/`、`summary.md`、`summary.json`，`tool.log` 为完整动作审计（每事件一行、毫秒、TOOL+DEVICE）。
+- v3（新任务默认）按最终布局落盘：根目录只有 `README.md`、`manifest.json`、`summary.md`、`receipt.json` 与 `events/`、`logs/`、`reports/`、`artifacts/`、`evidence/`、`milestones/` 六个目录。机器 JSON 进 `reports/`，串口/runner/window/cloud 日志进 `logs/`，raw 进 `evidence/raw/`。旧 v1/v2、旧根 JSON、`serial_logs/`、`cloud_run/` 继续可读，见 [references/result-layout-v3.md](references/result-layout-v3.md)。禁止 `.bin`、`task.log`、`tool_logs` 和临时结果文件。
 - v2 的结论只由 `events.jsonl` 计算；`gate_pass=false` 时禁止签发 PASS；手改 `tool.log`/`summary.*` 会被 `eventlog verify` 判为漂移。
 
 ## 异常与停止
@@ -198,8 +199,11 @@ python -u lstest/scripts/lstest.py --help
 python -u lstest/scripts/lstest.py preflight --profile <project-profile.json>
 python -u lstest/scripts/lstest.py tts --text-file utterance.txt --voice 付小春 --output audio/sample.wav
 python -u lstest/scripts/lstest.py audio scan --direction Render --json
-python -u lstest/scripts/lstest.py eventlog build --legacy <旧平铺日志> --out-dir <新结果目录> --meta <任务上下文.json> --markers <设备marker表.json>
+python -u lstest/scripts/lstest.py eventlog build --legacy <旧平铺日志> --out-dir <新结果目录> --meta <任务上下文.json> --markers <设备marker表.json> [--layout v3|v2]
 python -u lstest/scripts/lstest.py eventlog verify --run-dir <结果目录> [--check-files]
+python -u lstest/scripts/lstest.py result audit   --run-dir <结果目录>
+python -u lstest/scripts/lstest.py result migrate --run-dir <结果目录> [--apply]
+python -u lstest/scripts/lstest.py result readme  --run-dir <结果目录>
 ```
 
 运行全部单元测试（需要 `lstts-core` 可导入）：
@@ -215,6 +219,7 @@ PYTHONPATH=. python -m unittest discover -s lstest/tests -t .
 - [references/profile-schema.md](references/profile-schema.md)
 - [references/scenario-api.md](references/scenario-api.md)
 - [references/result-log-standard.md](references/result-log-standard.md)
+- [references/result-layout-v3.md](references/result-layout-v3.md)
 - [references/project-adaptation-standard.md](references/project-adaptation-standard.md)
 - [references/acceptance.md](references/acceptance.md)
 - [references/structured-event-log-v2.md](references/structured-event-log-v2.md)

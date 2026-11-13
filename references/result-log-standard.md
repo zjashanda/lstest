@@ -5,10 +5,13 @@
 | 版本 | 产物 | 状态 | 规范 |
 |---|---|---|---|
 | v1 | `serial_logs/*.log`、`tool.log`、`results.csv`、`cases.csv` | 兼容读取，旧任务仍有效 | 本文 |
-| v2 | 在 v1 证据基础上增加 `events.jsonl`、`raw/`、`tool.log`（完整动作审计）、`summary.md/json` | 新任务默认；结论必须由事件计算 | [structured-event-log-v2.md](structured-event-log-v2.md) |
+| v2 | 在 v1 证据基础上增加 `events.jsonl`、`raw/`、`tool.log`（完整动作审计）、`summary.md/json` | 旧任务可读 | [structured-event-log-v2.md](structured-event-log-v2.md) |
+| v3 | 在 v2 事件基础上按最终结果目录布局落盘：`events/`、`logs/`、`reports/`、`artifacts/`、`evidence/`、`milestones/`，根目录只留 `README.md`/`manifest.json`/`summary.md`/`receipt.json` | **新任务默认**；旧 v1/v2/`cloud_run` 可读 | [result-layout-v3.md](result-layout-v3.md) |
 
-两版不混用：运行目录只要有 `events.jsonl` 就按 v2 校验（`ToolLogValidator.validate_run`
-自动分流），否则按 v1 校验。v1 → v2 的迁移命令、判定矩阵与校验见 v2 规范第 6/8/9 节。
+`ToolLogValidator.validate_run` 与 `eventlog verify` 通过 `scripts/result_layout.py`
+自动识别布局：v3（`events/` 等目录）、v2（根 `events.jsonl`）、v1（四产物）、
+早期过渡布局（`machine/`/`execution_logs/`）均可读。旧根 JSON、`serial_logs/`、
+`cloud_run/` 不需要先迁移；新任务只写 v3。布局只改路径，不改 `tool.log` 行格式与判定。
 
 v2 补充的硬规则（v1 未覆盖）：
 
@@ -33,7 +36,7 @@ result/<timestamp>_<task>/
   cases.csv
 ```
 
-`serial_logs` 是连续原始证据；`tool.log` 是唯一人读执行账本；`results.csv` 每 case 一行；`cases.csv` 在设备动作前冻结。v2 用 `events.jsonl` 作为机器真源、`tool.log` 作为**完整动作审计**（TOOL + DEVICE 单行毫秒时序），`summary.md/json` 只放结论；`serial_logs`、`results.csv`、`cases.csv` 三者职责不变。
+`serial_logs` 是连续原始证据；`tool.log` 是唯一人读执行账本；`results.csv` 每 case 一行；`cases.csv` 在设备动作前冻结。v2 用 `events.jsonl` 作为机器真源、`tool.log` 作为**完整动作审计**（TOOL + DEVICE 单行毫秒时序），`summary.md/json` 只放结论；`serial_logs`、`results.csv`、`cases.csv` 三者职责不变。v3 把这些产物移到 `events/`、`logs/serial/`、`reports/` 等目录，职责不变、读取走 resolver。
 
 所有 `tool.log` 行使用北京时间 `YYYY-MM-DD HH:mm:ss.SSS`，标签只能是 `[SYSTEM]`、`[CASE]`、`[ACTION]`、`[COMMAND]`、`[DEVICE]`、`[ONLINE]`、`[PLAYER]`、`[ERROR]`、`[RESULT]`、`[SUMMARY]`。冒号右侧必须是 profile 正则捕获的原始值。
 

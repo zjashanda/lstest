@@ -277,8 +277,9 @@ class ScenarioRuntime:
             raw = record
         if not raw.text:
             return []
+        prefix = str(getattr(self.artifacts, "serial_rel_dir", "serial_logs") or "serial_logs")
         refs = raw.evidence or (() if raw.cursor is None or not raw.port else (
-            f"serial_logs/serial_{raw.port}_{raw.role or 'unknown'}.log#{raw.cursor}",
+            f"{prefix}/serial_{raw.port}_{raw.role or 'unknown'}.log#{raw.cursor}",
         ))
         if refs != raw.evidence:
             raw = RawLogRecord(

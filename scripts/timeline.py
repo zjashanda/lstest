@@ -575,51 +575,79 @@ class ToolLogValidator:
     def validate_run(self, run_dir: Path) -> list[str]:
         """Validate the delivery boundary and human ledger of one finished run.
 
-        同时支持两种版本：v1 四产物（``tool.log`` 人读账本）与 v2 结构化产物
-        （``events.jsonl`` + ``run.log`` + ``summary.md/json``）。存在 events.jsonl 时
-        按 v2 校验，否则按 v1 校验；二者不混用。
+        支持三种可读布局：
+
+        - v3（新任务）：根目录只有 README/manifest/summary.md/receipt + 六个目录；
+          ``events/``、``reports/``、``logs/``、``artifacts/``、``evidence/``、``milestones/``。
+        - v2：根目录 ``events.jsonl`` + ``tool.log`` + ``summary.md/json``（旧任务）。
+        - v1：四产物 ``tool.log``/``results.csv``/``cases.csv``/``serial_logs``。
+
+        旧根 JSON、``serial_logs/``、``cloud_run/``、``machine/``、``execution_logs/``
+        一律通过 ``result_layout`` resolver 读取，不要求先迁移。
         """
+        try:
+            from . import result_layout
+        except ImportError:  # pragma: no cover - 直接执行回退
+            import result_layout  # type: ignore
         root = Path(run_dir)
         errors: list[str] = []
         actual = {item.name for item in root.iterdir()} if root.is_dir() else set()
-        v2 = "events.jsonl" in actual
-        if v2:
-            allowed = {"events.jsonl", "tool.log", "tool.live.log", "summary.md", "summary.json", "raw",
-                       "results.csv", "cases.csv", "serial_logs", "STOP"}
-            required = {"events.jsonl", "tool.log", "summary.md", "summary.json"}
+        layout = result_layout.detect_layout(root)
+        allowed = (set(result_layout.ROOT_ALLOWED)
+                   | set(result_layout.LEGACY_ROOT_FILES)
+                   | set(result_layout.LEGACY_ROOT_DIRS))
+        if layout in (result_layout.LAYOUT_V3, result_layout.LAYOUT_TRANSITIONAL):
             unexpected = actual - allowed
+            if unexpected:
+                errors.append("存在非标准运行产物: " + ", ".join(sorted(unexpected)))
+            required = ("readme", "summary_md", "tool_log", "events", "summary_json")
+            missing = [result_layout.ENTRIES[key].rel for key in required
+                       if result_layout.resolve(root, key) is None]
+            if missing:
+                errors.append(f"缺少标准 {layout} 产物: " + ", ".join(missing))
+            errors.extend(self._validate_events_bundle(root))
+        elif "events.jsonl" in actual:
+            legacy_allowed = allowed
+            required = {"events.jsonl", "tool.log", "summary.md", "summary.json"}
+            unexpected = actual - legacy_allowed
             if unexpected:
                 errors.append("存在非标准运行产物: " + ", ".join(sorted(unexpected)))
             missing = required - actual
             if missing:
                 errors.append("缺少标准 v2 产物: " + ", ".join(sorted(missing)))
-            try:
-                from .eventlog import validate_tool_log_text, verify_bundle
-            except ImportError:  # pragma: no cover - 直接执行回退
-                from eventlog import validate_tool_log_text, verify_bundle
-            findings = verify_bundle(root)
-            errors.extend(
-                f"{item['code']}: {item['message']}"
-                for item in findings if item["level"] == "ERROR"
-            )
-            tool = root / "tool.log"
-            if tool.is_file():
-                errors.extend(validate_tool_log_text(tool.read_text(encoding="utf-8")))
+            errors.extend(self._validate_events_bundle(root))
         else:
             expected_files = {"tool.log", "results.csv", "cases.csv", "serial_logs"}
-            unexpected = actual - expected_files - {"STOP"}
+            unexpected = actual - expected_files - {"STOP", "cloud_run"} - set(result_layout.LEGACY_ROOT_FILES)
             if unexpected:
                 errors.append("存在非标准运行产物: " + ", ".join(sorted(unexpected)))
             required = {"tool.log", "results.csv", "cases.csv", "serial_logs"}
             missing = required - actual
             if missing:
                 errors.append("缺少标准运行产物: " + ", ".join(sorted(missing)))
-            tool = root / "tool.log"
-            if tool.is_file():
+            tool = result_layout.resolve(root, "tool_log")
+            if tool is not None and tool.is_file():
                 errors.extend(self.validate_path(tool))
-        serial = root / "serial_logs"
-        if serial.is_dir():
+        serial = result_layout.resolve(root, "serial_dir")
+        if serial is not None and serial.is_dir():
             for item in serial.iterdir():
                 if not item.is_file() or item.suffix.lower() != ".log":
                     errors.append(f"串口证据不是 .log: {item.name}")
+        return errors
+
+    def _validate_events_bundle(self, root: Path) -> list[str]:
+        try:
+            from . import result_layout
+            from .eventlog import validate_tool_log_text, verify_bundle
+        except ImportError:  # pragma: no cover - 直接执行回退
+            import result_layout  # type: ignore
+            from eventlog import validate_tool_log_text, verify_bundle
+        findings = verify_bundle(root)
+        errors = [
+            f"{item['code']}: {item['message']}"
+            for item in findings if item["level"] == "ERROR"
+        ]
+        tool = result_layout.resolve(root, "tool_log")
+        if tool is not None and tool.is_file():
+            errors.extend(validate_tool_log_text(tool.read_text(encoding="utf-8")))
         return errors

@@ -1,5 +1,10 @@
 # 结构化事件日志 v2（完整动作审计 + 人机双读 + 判定一致性）
 
+> 布局提示：新任务按 [result-layout-v3.md](result-layout-v3.md) 落盘——`events/events.jsonl`、
+> `events/tool.log`、`reports/summary.json`、`evidence/raw/`。下文的 `events.jsonl`、`tool.log`、
+> `summary.json`、`raw/` 指 v2 旧根目录布局，v1/v2 结果仍可读；两侧统一用
+> `scripts/result_layout.py` 解析路径。
+
 本文是 v2 的规范正文。v1（`tool.log` 四产物）仍被读取和校验，见
 [result-log-standard.md](result-log-standard.md)。
 
@@ -44,7 +49,9 @@ result/<timestamp>_<task>/
   cases.csv             # 设备动作前冻结
 ```
 
-- 新任务必须产出 `events.jsonl`、`tool.log`、`summary.md`、`summary.json`；`raw/` 按需。
+- 新任务必须产出事件真源、`tool.log`、`summary.md`、机器 summary：
+  v3 为 `events/events.jsonl`、`events/tool.log`、`summary.md`、`reports/summary.json`；
+  v2 旧布局为根目录 `events.jsonl`、`tool.log`、`summary.md`、`summary.json`；`raw/` 按需（v3 为 `evidence/raw/`）。
 - `tool.live.log` 只在结构化运行期间用于 tail，收尾后以 `tool.log` 为准，不参与验收。
 - `serial_logs/`、`results.csv`、`cases.csv` 的职责不变。
 
