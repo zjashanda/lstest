@@ -9,7 +9,7 @@
 | MIGRATE-ENGINE（迁入 lstest 引擎，项目无关） | 5 | 时序断言原语、断言 DSL 语义、事件图归因、状态/能力覆盖、仿真样例概念 |
 | MIGRATE-DATA（迁入 lstest 数据层，不改代码） | 6 | 语音验证 wiki、验证包、失败模式、FA2 期望表、项目知识、intake 模板 |
 | ADAPT（薄适配，落在 `adapters/`） | 2 | 串口/播放原始记录采集、项目 case 计划 |
-| CROSS-REPO（不在 lstest 落地，转其它 canonical） | 6 | device-io、ark-node、ark-dispatch、venusahisiburner、asset-tools、ark-archive |
+| CROSS-REPO（不在 lstest 落地，转其它 canonical） | 6 | device-io、ark-node、ark-dispatch、burner、asset-tools、ark-archive |
 | REPLACE（被 lstest 既有机制等价取代，不迁移代码） | 4 | 日志解析器、play 插件、polaris.local 机器配置、逐用例 evaluator |
 | NON-MIGRATABLE（明确不迁移，附原因） | 7 | 厂商二进制、xlsx、Gherkin runner、完整 Replay VM、分布式运行时、项目名嗅探、Polaris 专属批量 runner |
 | DEFER（本轮不迁，等待 canonical 归属） | 3 | 云控工具、OTA 报告工具、分析趋势 |
@@ -102,7 +102,7 @@
 | P-C9 设备适配层/动作执行器/流程映射/审计 | `device-io`（NOAH-51 已交付） | 设备枚举与动作属 device-io 边界；lstest 只消费接口 |
 | P-C7 资源 claim 与锁 | `ark-node`（NOAH-49 已交付）+ lstest 既有串口锁 | 节点级资源与身份属 ark-node |
 | P-C10 验证内核/IR/场景调度 | `ark-dispatch`（NOAH-45 规划项） | 决策与调度是 ark-dispatch 职责，lstest 只执行单轮 case |
-| P-D4 烧录与 OTA 工具 | `venusahisiburner` + `ark-archive` | 烧录域与归档域，均已有 canonical |
+| P-D4 烧录与 OTA 工具 | `burner` + `ark-archive` | 烧录域与归档域，均已有 canonical |
 | P-D5 厂商二进制 | `asset-tools`（资产 manifest/OSS 引用） | 56MB 二进制不入任何 skill 仓库 |
 | P-C12 趋势分析 | `ark-archive` 的报告/归档能力 | lstest 不建长期指标库 |
 
@@ -160,6 +160,6 @@ lstest/
 
 ## 8. 待决策 / 遗留
 
-1. `docs/knowledge/venusws63/autobus-burn-ota-report.md` 属烧录域，迁到 venusahisiburner 还是仅保留引用，需要郑保山确认。
+1. `docs/knowledge/venusws63/autobus-burn-ota-report.md` 属烧录域，迁到 burner 还是仅保留引用，需要郑保山确认。
 2. 云控工具（N7）与批量报告工具（N6）的 canonical 归属未定。
 3. FA2 若要成为正式 profile，需要至少一条真实串口/工具日志作为 fixture 来源（当前仅有期望表）。

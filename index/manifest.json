@@ -1,0 +1,32 @@
+{
+  "schema": "ark.skill-manifest.v1",
+  "skill": "lstest",
+  "title": "lstest · 测试能力（唯一 canonical）",
+  "repo": "zjashanda/lstest",
+  "frontmatter_name": "lstest",
+  "aliases": [],
+  "role": "test-only",
+  "scope": "全部测试能力：测试逻辑、workflow、任务目录结构、preflight、OTA/升级、烧后验证、上下电观察、稳定性、重启恢复、音频、网络、串口证据、资源监测、测试报告与证据编排。",
+  "not_for": [
+    "固件写入（交给 burner）",
+    "知识、方法、缺陷沉淀（交给 ark-kb）",
+    "项目私有 marker/端口/正则（只能进 profiles/<project>/profile.json）"
+  ],
+  "version": "1.1.0",
+  "index": {
+    "machine": "index/index.json",
+    "human": "index/README.md",
+    "schema": "ark.skill-index.v1",
+    "route_schema": "ark.skill-route.v1"
+  },
+  "entry": {
+    "cli": "scripts/lstest.py",
+    "skill_doc": "SKILL.md",
+    "profile_dir": "profiles",
+    "case_dir": "cases",
+    "adapter_dir": "adapters"
+  },
+  "routing_contract": "agents read index/index.json first, then route capability -> skill -> chip -> project -> profile -> workflow; never guess a profile or case pack",
+  "updated_at": "2026-11-19 12:34:30",
+  "updated_by": "NOAH-242"
+}

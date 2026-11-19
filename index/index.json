@@ -1,0 +1,764 @@
+{
+  "schema": "ark.skill-index.v1",
+  "skill": "lstest",
+  "skill_version": "1.1.0",
+  "repo": "zjashanda/lstest",
+  "route_schema": "ark.skill-route.v1",
+  "route_order": [
+    "capability",
+    "skill",
+    "chip",
+    "project",
+    "profile",
+    "workflow",
+    "preconditions",
+    "execute",
+    "evidence",
+    "ark-kb"
+  ],
+  "entry": {
+    "cli": "scripts/lstest.py",
+    "subcommands": [
+      "preflight",
+      "init",
+      "smoke",
+      "tts",
+      "tts-manifest",
+      "audio",
+      "eventlog",
+      "state",
+      "result",
+      "list"
+    ],
+    "doc": "SKILL.md"
+  },
+  "capabilities": [
+    {
+      "capability_id": "test.profile-admission",
+      "skill": "lstest",
+      "module": "profile",
+      "chip": [
+        "csk6",
+        "csk7",
+        "hi3863"
+      ],
+      "project": [
+        "cskwb01",
+        "venusws63",
+        "midea-fa2"
+      ],
+      "firmware_family": [
+        "any"
+      ],
+      "profile": "profiles/<project>/profile.json",
+      "workflow": "wf.lstest.profile-admission",
+      "inputs": [
+        "profile.json（schema_version 2）",
+        "可选 --device-snapshot（ark.device-role-map.v1 / ark.device-io.v1）",
+        "fixture（可选）"
+      ],
+      "outputs": [
+        "preflight stdout JSON（status / ports / coverage）",
+        "BLOCKED_PROFILE_CONTRACT（未满足正式合同）"
+      ],
+      "preconditions": [
+        "只读，不打开硬件",
+        "profile 必须来自真实日志取证；fixture 只能是文档 marker 派生的合成样本",
+        "contract_mode 非 formal 时只允许 preflight/fixture，正式压测 BLOCKED"
+      ],
+      "evidence_schema": "lstest.result-layout.v3",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "test.init-smoke",
+      "skill": "lstest",
+      "module": "smoke",
+      "chip": [
+        "csk6",
+        "csk7",
+        "hi3863"
+      ],
+      "project": [
+        "cskwb01",
+        "venusws63"
+      ],
+      "firmware_family": [
+        "any"
+      ],
+      "profile": "profiles/<project>/profile.json",
+      "workflow": "wf.lstest.init-smoke",
+      "inputs": [
+        "profile.json",
+        "可选 --device-snapshot"
+      ],
+      "outputs": [
+        "init/smoke 结果目录（events.jsonl、tool.log）",
+        "status / device_snapshot 块"
+      ],
+      "preconditions": [
+        "必须显式 --hardware 才打开串口/播放设备",
+        "初始化超时、日志等级重试耗尽属可重试项，不自动退出任务"
+      ],
+      "evidence_schema": "lstest.result-layout.v3",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "test.wake-command",
+      "skill": "lstest",
+      "module": "verification",
+      "chip": [
+        "csk6",
+        "csk7",
+        "hi3863"
+      ],
+      "project": [
+        "cskwb01",
+        "venusws63"
+      ],
+      "firmware_family": [
+        "any"
+      ],
+      "profile": "profiles/<project>/profile.json",
+      "workflow": "wf.lstest.wake-command",
+      "inputs": [
+        "profile event_rules（wake_result / command_keyword / asr_marker）",
+        "cases/packs/{basic-command,first-wake,recognition-mode-wake}.json",
+        "播放语料（tts 产出或既有语料）"
+      ],
+      "outputs": [
+        "events/events.jsonl（机器真源）",
+        "events/tool.log（完整动作审计）",
+        "summary.md / summary.json / receipt.json"
+      ],
+      "preconditions": [
+        "profile.contract_mode=formal 才能用于正式压测",
+        "缺时间戳的时序规则只能 SKIP，不得判 PASS",
+        "项目适配器只搬原始行，不解析"
+      ],
+      "evidence_schema": "lstest.result-layout.v3",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "test.online-duplex",
+      "skill": "lstest",
+      "module": "verification",
+      "chip": [
+        "csk6",
+        "csk7",
+        "hi3863"
+      ],
+      "project": [
+        "cskwb01"
+      ],
+      "firmware_family": [
+        "any"
+      ],
+      "profile": "profiles/cskwb01/profile.json",
+      "workflow": "wf.lstest.online-duplex",
+      "inputs": [
+        "cases/packs/{online-full-duplex,half-duplex,online-mixed-stress}.json",
+        "cskwb01 三端拓扑（ap/cp/asr）"
+      ],
+      "outputs": [
+        "events/events.jsonl",
+        "summary.md（轮末唯一 RESULT）"
+      ],
+      "preconditions": [
+        "coverage_policy missing_minimum=BLOCKED",
+        "在线/半双工混跑必须有对应 profile 能力声明，禁止按项目名推断"
+      ],
+      "evidence_schema": "lstest.result-layout.v3",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "test.false-wake",
+      "skill": "lstest",
+      "module": "verification",
+      "chip": [
+        "csk6",
+        "csk7",
+        "hi3863"
+      ],
+      "project": [
+        "cskwb01"
+      ],
+      "firmware_family": [
+        "any"
+      ],
+      "profile": "profiles/cskwb01/profile.json",
+      "workflow": "wf.lstest.false-wake",
+      "inputs": [
+        "cases/packs/false-wake.json",
+        "静默窗口配置（cases 提供）"
+      ],
+      "outputs": [
+        "events/events.jsonl",
+        "summary.md"
+      ],
+      "preconditions": [
+        "静默窗口内不得有 wake_result；event_absent/event_not_during 规则必须来自 cases"
+      ],
+      "evidence_schema": "lstest.result-layout.v3",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "test.stability-soak",
+      "skill": "lstest",
+      "module": "stability",
+      "chip": [
+        "csk6",
+        "csk7",
+        "hi3863"
+      ],
+      "project": [
+        "cskwb01",
+        "venusws63"
+      ],
+      "firmware_family": [
+        "any"
+      ],
+      "profile": "profiles/<project>/profile.json",
+      "workflow": "wf.lstest.stability-soak",
+      "inputs": [
+        "cases pack + 轮次/时长（planned_total、截止时长）",
+        "stop 条件（profile 声明）"
+      ],
+      "outputs": [
+        "events/events.jsonl（多轮）",
+        "timeline / timing / coverage 统计",
+        "summary.md"
+      ],
+      "preconditions": [
+        "长跑必须声明截止时长、停止条件与巡检项",
+        "单轮失败不退出任务；异常隔离后继续下一可执行轮"
+      ],
+      "evidence_schema": "lstest.result-layout.v3",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "test.audio-material",
+      "skill": "lstest",
+      "module": "audio",
+      "chip": [
+        "any"
+      ],
+      "project": [
+        "cskwb01",
+        "venusws63",
+        "midea-fa2"
+      ],
+      "firmware_family": [
+        "any"
+      ],
+      "profile": "不依赖 profile（主机侧能力）",
+      "workflow": "wf.lstest.audio-material",
+      "inputs": [
+        "文本或文本 manifest",
+        "音色（~/.lstest/voices 或 lstts 内置）"
+      ],
+      "outputs": [
+        "WAV + 音频 manifest（时长/响度/静音/削波/SHA-256）",
+        "声卡枚举与播放结果"
+      ],
+      "preconditions": [
+        "合成只走 lstts（lstts-core）；不引入其他 TTS",
+        "只使用本地音色时仅需 LSTTS_TTS_TOKEN",
+        "未指定声卡用系统默认 Render；指定稳定 key 失败不回退"
+      ],
+      "evidence_schema": "lstest.audio-manifest",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "test.serial-evidence",
+      "skill": "lstest",
+      "module": "evidence",
+      "chip": [
+        "any"
+      ],
+      "project": [
+        "cskwb01",
+        "venusws63"
+      ],
+      "firmware_family": [
+        "any"
+      ],
+      "profile": "profiles/<project>/profile.json",
+      "workflow": "wf.lstest.serial-evidence",
+      "inputs": [
+        "串口原始日志或旧平铺日志",
+        "markers / state extension（可选）"
+      ],
+      "outputs": [
+        "events/events.jsonl（v2）",
+        "tool.log / run.log",
+        "eventlog verify 结论"
+      ],
+      "preconditions": [
+        "禁止 .bin、task.log、tool_logs 与临时结果文件",
+        "verdict 冲突时 gate_pass=false，最终状态禁止 PASS"
+      ],
+      "evidence_schema": "lstest.result-layout.v3",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "test.result-orchestration",
+      "skill": "lstest",
+      "module": "reporting",
+      "chip": [
+        "any"
+      ],
+      "project": [
+        "cskwb01",
+        "venusws63"
+      ],
+      "firmware_family": [
+        "any"
+      ],
+      "profile": "不依赖 profile",
+      "workflow": "wf.lstest.result-orchestration",
+      "inputs": [
+        "结果目录（v1/v2/v3）"
+      ],
+      "outputs": [
+        "README.md / manifest.json / summary.md / receipt.json",
+        "audit 报告（越界项）",
+        "migrate dry-run/apply 结果"
+      ],
+      "preconditions": [
+        "v3 根目录只允许 README/manifest/summary/receipt + events/logs/reports/artifacts/evidence/milestones",
+        "迁移默认 dry-run"
+      ],
+      "evidence_schema": "lstest.result-layout.v3",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "test.state-coverage",
+      "skill": "lstest",
+      "module": "analysis",
+      "chip": [
+        "any"
+      ],
+      "project": [
+        "cskwb01",
+        "venusws63"
+      ],
+      "firmware_family": [
+        "any"
+      ],
+      "profile": "profiles/<project>/profile.json",
+      "workflow": "wf.lstest.state-coverage",
+      "inputs": [
+        "状态盘点 JSON / profile",
+        "state extension（项目扩展）"
+      ],
+      "outputs": [
+        "状态覆盖率报告",
+        "COVERAGE_DEGRADED / BLOCKED 判定"
+      ],
+      "preconditions": [
+        "禁止按项目名推断能力；只看 profile 端口能力与 coverage_policy"
+      ],
+      "evidence_schema": "lstest.state-catalog",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "test.ota-upgrade",
+      "skill": "lstest",
+      "module": "ota",
+      "chip": [
+        "csk7",
+        "hi3863"
+      ],
+      "project": [
+        "venusws63"
+      ],
+      "firmware_family": [
+        "venusa-ws63"
+      ],
+      "profile": "profiles/venusws63/profile.json（draft）",
+      "workflow": "wf.lstest.ota-upgrade",
+      "inputs": [
+        "OTA 包",
+        "轮次配置"
+      ],
+      "outputs": [
+        "轮次统计",
+        "OTA 报告"
+      ],
+      "preconditions": [
+        "证据缺口：仓库只有方法说明 docs/voice-validation/projects/venusws63/autobus-burn-ota-report.md，tools/ota/*.py 未随 Polaris 迁入",
+        "未补齐执行工具与真机证据前不得作为 active 能力驱动动作"
+      ],
+      "evidence_schema": "lstest.result-layout.v3",
+      "version": "0.1.0",
+      "status": "gap"
+    }
+  ],
+  "chips": [
+    {
+      "chip_id": "csk6",
+      "name": "CSK6 / VenusA",
+      "profiles": [
+        "cskwb01"
+      ]
+    },
+    {
+      "chip_id": "csk7",
+      "name": "CSK7 / VenusA",
+      "profiles": [
+        "venusws63"
+      ]
+    },
+    {
+      "chip_id": "hi3863",
+      "name": "HI3863 / WS63",
+      "profiles": [
+        "venusws63"
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "project_id": "cskwb01",
+      "topology": "csk_ap_cp_wb01_control",
+      "profile": "profiles/cskwb01/profile.json",
+      "profile_status": "draft",
+      "contract_mode": "draft",
+      "evidence_class": "marker-strings-only",
+      "verified": false,
+      "case_packs": [
+        "basic-command",
+        "false-wake",
+        "first-wake",
+        "half-duplex",
+        "online-full-duplex",
+        "online-mixed-stress",
+        "recognition-mode-wake"
+      ],
+      "capabilities": [
+        "test.profile-admission",
+        "test.init-smoke",
+        "test.wake-command",
+        "test.online-duplex",
+        "test.false-wake",
+        "test.stability-soak",
+        "test.serial-evidence",
+        "test.result-orchestration",
+        "test.state-coverage"
+      ],
+      "blocked_reason": "profile 正则只由 Polaris 文档 marker 推导，captured_device_logs=false；正式压测需 formal profile"
+    },
+    {
+      "project_id": "venusws63",
+      "topology": "ap_wifi_control_no_cp",
+      "profile": "profiles/venusws63/profile.json",
+      "profile_status": "draft",
+      "contract_mode": "draft",
+      "evidence_class": "marker-strings-only",
+      "verified": false,
+      "case_packs": [],
+      "capabilities": [
+        "test.profile-admission",
+        "test.init-smoke",
+        "test.wake-command",
+        "test.stability-soak",
+        "test.serial-evidence",
+        "test.result-orchestration",
+        "test.state-coverage",
+        "test.ota-upgrade"
+      ],
+      "blocked_reason": "无 case pack；profile 未真机复核；OTA 只有方法文档"
+    },
+    {
+      "project_id": "midea-fa2",
+      "topology": "unknown",
+      "profile": null,
+      "profile_status": "absent",
+      "contract_mode": "absent",
+      "verified": false,
+      "case_packs": [
+        "cases/fa2（仅期望数据，不是断言 pack）"
+      ],
+      "capabilities": [
+        "test.audio-material"
+      ],
+      "blocked_reason": "无采集日志，按规则不得创建 profile；只能做语料/期望表"
+    }
+  ],
+  "profiles": [
+    {
+      "profile_id": "cskwb01",
+      "path": "profiles/cskwb01/profile.json",
+      "contract_mode": "draft",
+      "topology": "csk_ap_cp_wb01_control",
+      "ports": "ap@COM14 / cp@COM12 / asr@COM13 / control@COM15",
+      "verified": false,
+      "source_commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    },
+    {
+      "profile_id": "venusws63",
+      "path": "profiles/venusws63/profile.json",
+      "contract_mode": "draft",
+      "topology": "ap_wifi_control_no_cp",
+      "ports": "ap@COM14 / upper@COM13 / asr=upper 别名 / control@COM15",
+      "verified": false,
+      "source_commit": "a4ef61478f343e599282ba3aac4cc8705fbdae4a"
+    },
+    {
+      "profile_id": "midea-fa2",
+      "path": "profiles/midea-fa2/README.md",
+      "contract_mode": "absent",
+      "topology": "unknown",
+      "verified": false,
+      "note": "明确不迁移：无真实日志，编造正则会违反 profile-schema"
+    }
+  ],
+  "workflows": [
+    {
+      "workflow_id": "wf.lstest.profile-admission",
+      "steps": [
+        "load profile",
+        "fixture",
+        "preflight"
+      ],
+      "entry": "python -u scripts/lstest.py preflight --profile profiles/<project>/profile.json [--device-snapshot <json>]"
+    },
+    {
+      "workflow_id": "wf.lstest.init-smoke",
+      "steps": [
+        "preflight",
+        "init",
+        "smoke"
+      ],
+      "entry": "python -u scripts/lstest.py smoke --profile profiles/<project>/profile.json --hardware"
+    },
+    {
+      "workflow_id": "wf.lstest.wake-command",
+      "steps": [
+        "preflight",
+        "play 语料",
+        "adapter 提交 RawLogRecord",
+        "assertions 判定",
+        "render summary"
+      ],
+      "entry": "项目运行入口 + adapters/<project>/case_plan.py（仓库不提供统一 run 子命令）",
+      "note": "case 期望值只来自 cases/；缺时间戳规则只能 SKIP"
+    },
+    {
+      "workflow_id": "wf.lstest.online-duplex",
+      "steps": [
+        "preflight",
+        "加载 online packs",
+        "多轮执行",
+        "coverage 判定",
+        "summary"
+      ],
+      "entry": "项目运行入口 + cases/packs/online-*.json"
+    },
+    {
+      "workflow_id": "wf.lstest.false-wake",
+      "steps": [
+        "preflight",
+        "静默窗口",
+        "event_absent 判定"
+      ],
+      "entry": "项目运行入口 + cases/packs/false-wake.json"
+    },
+    {
+      "workflow_id": "wf.lstest.stability-soak",
+      "steps": [
+        "preflight",
+        "多轮循环",
+        "异常隔离",
+        "统计与收尾"
+      ],
+      "entry": "项目运行入口 + 截止时长/停止条件",
+      "note": "长跑必须声明停止条件；单轮失败不退出任务"
+    },
+    {
+      "workflow_id": "wf.lstest.audio-material",
+      "steps": [
+        "tts 合成",
+        "校验 WAV",
+        "audio scan/play"
+      ],
+      "entry": "python -u scripts/lstest.py tts --text-file <txt> --output <wav>；python -u scripts/lstest.py audio play --file <wav>"
+    },
+    {
+      "workflow_id": "wf.lstest.serial-evidence",
+      "steps": [
+        "采集原始行",
+        "eventlog build/verify",
+        "渲染 tool.log/summary"
+      ],
+      "entry": "python -u scripts/lstest.py eventlog verify --run-dir <dir> --check-files"
+    },
+    {
+      "workflow_id": "wf.lstest.result-orchestration",
+      "steps": [
+        "result audit",
+        "result migrate（默认 dry-run）",
+        "result manifest/readme"
+      ],
+      "entry": "python -u scripts/lstest.py result audit --run-dir <dir>；python -u scripts/lstest.py result manifest --run-dir <dir>"
+    },
+    {
+      "workflow_id": "wf.lstest.state-coverage",
+      "steps": [
+        "state list/check",
+        "profile-coverage",
+        "coverage 判定"
+      ],
+      "entry": "python -u scripts/lstest.py state profile-coverage --events <events.jsonl>"
+    },
+    {
+      "workflow_id": "wf.lstest.ota-upgrade",
+      "steps": [
+        "（缺口）OTA 执行",
+        "轮次统计",
+        "报告"
+      ],
+      "entry": "未提供；仓库只剩方法文档，tools/ota/*.py 未迁入",
+      "status": "gap"
+    }
+  ],
+  "validators": [
+    {
+      "validator_id": "assertions",
+      "file": "scripts/assertions.py",
+      "rules": [
+        "event_exists",
+        "event_within_ms",
+        "event_order",
+        "event_absent",
+        "event_not_during",
+        "sequence",
+        "duration",
+        "response",
+        "count_range",
+        "state_required",
+        "no_reboot"
+      ],
+      "note": "缺时间戳的时序规则只能 SKIP"
+    },
+    {
+      "validator_id": "coverage",
+      "file": "scripts/coverage.py",
+      "outputs": [
+        "BLOCKED",
+        "COVERAGE_DEGRADED"
+      ]
+    },
+    {
+      "validator_id": "attribution",
+      "file": "scripts/attribution.py",
+      "note": "项目私有因果规则由参数传入，不写死引擎"
+    },
+    {
+      "validator_id": "eventlog-verify",
+      "file": "scripts/eventlog.py",
+      "note": "schema、序号、重算一致、判定冲突、路径泄漏"
+    },
+    {
+      "validator_id": "states",
+      "file": "scripts/states.py",
+      "note": "状态目录、扩展校验、覆盖率"
+    },
+    {
+      "validator_id": "adapter-guard",
+      "file": "scripts/adapter_guard.py",
+      "note": "禁止适配层解析/写结果"
+    }
+  ],
+  "templates": [
+    {
+      "template_id": "result-layout-v3",
+      "doc": "references/result-layout-v3.md",
+      "root_layout": [
+        "README.md",
+        "manifest.json",
+        "summary.md",
+        "receipt.json",
+        "events/",
+        "logs/",
+        "reports/",
+        "artifacts/",
+        "evidence/",
+        "milestones/"
+      ]
+    },
+    {
+      "template_id": "structured-event-log-v2",
+      "doc": "references/structured-event-log-v2.md",
+      "note": "events.jsonl 是机器真源；tool.log 是渲染物，禁止手改"
+    },
+    {
+      "template_id": "task-dir",
+      "doc": "index/task-dir-template.md",
+      "note": "任务目录由 lstest 建：plan.md / assets / work / logs / result / receipts"
+    },
+    {
+      "template_id": "project-adapter",
+      "doc": "references/project-adapter-template.md"
+    },
+    {
+      "template_id": "scenario-api",
+      "doc": "references/scenario-api.md"
+    }
+  ],
+  "compatibility": [
+    {
+      "profile": "cskwb01",
+      "case_packs": [
+        "basic-command",
+        "false-wake",
+        "first-wake",
+        "half-duplex",
+        "online-full-duplex",
+        "online-mixed-stress",
+        "recognition-mode-wake"
+      ],
+      "contract_mode": "draft",
+      "status": "fixture-only",
+      "note": "允许 preflight/fixture；正式压测 BLOCKED_PROFILE_CONTRACT"
+    },
+    {
+      "profile": "venusws63",
+      "case_packs": [],
+      "contract_mode": "draft",
+      "status": "gap",
+      "note": "无 case pack；OTA 只有方法文档"
+    },
+    {
+      "profile": "midea-fa2",
+      "case_packs": [],
+      "contract_mode": "absent",
+      "status": "blocked",
+      "note": "不得创建 profile"
+    }
+  ],
+  "task_dir_contract": {
+    "owner": "lstest",
+    "layout": [
+      "plan.md",
+      "assets/",
+      "work/",
+      "logs/",
+      "result/",
+      "receipts/"
+    ],
+    "note": "burner 只写烧录产物到 result/ 下的 steps/tool_logs/serial_logs"
+  },
+  "updated_at": "2026-11-19 12:34:30",
+  "updated_by": "NOAH-242"
+}
