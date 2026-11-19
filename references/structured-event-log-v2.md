@@ -333,7 +333,7 @@ v1 旧任务的 `tool.log` 保持秒级仅为兼容读取；新任务（v2）不
 |---|---|---|---|
 | `ark-archive` 回执/manifest | `YYYY-MM-DD HH:MM:SS`，明文禁止毫秒 | 记录字段，不是日志流 | 保持；如需毫秒另加 `*_ms` 机器字段 |
 | `audio-runtime` / `tts-runtime` time lint | 禁止毫秒 | 是 | 升为允许/要求毫秒（与本次契约同步） |
-| `venusahisiburner` / `device-io` | `T` + 毫秒、无时区 | 是 | 把 `T` 改为空格即可满足；毫秒保留 |
+| `burner` / `device-io` | `T` + 毫秒、无时区 | 是 | 把 `T` 改为空格即可满足；毫秒保留 |
 | `ark-node` / `asset-tools` | 展示 `YYYY-MM-DD HH:MM:SS`，机器 `+0800` | 展示是日志、机器是字段 | 日志侧补毫秒；机器字段不改 |
 | `skillhub-sync` | `%Y-%m-%dT%H:%M:%SZ`（UTC+Z） | 是 | 已知违约；改北京时间毫秒 |
 | `ark-dispatch` / `ark-kb` 文档时间 | 秒级 | 文档 | 不强制，引用日志时用毫秒 |

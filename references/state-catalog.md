@@ -224,7 +224,7 @@ profile 声明 `gate.required_states` 后，框架追加两项 gate 检查：
 | blocking 后窗口内未恢复 | 进 `blocking.unrecovered`，gate `no_unrecovered_blocking=false` |
 
 host 时间永远来自实际接收/动作窗口；`device_ts` 只原样保存，不参与排序。
-这保证跨仓库（venusahisiburner/device-io 用 `T`+毫秒）复用设备时间时不会污染 lstest 时间线。
+这保证跨仓库（burner/device-io 用 `T`+毫秒）复用设备时间时不会污染 lstest 时间线。
 
 **关联**：设备事件沿用 TOOL 事件的 `correlation_id`。`state_report.correlation` 给出
 `with_id`/`without_id` 计数与按关联键分组的码序列（最多 20 组、每组 12 个码）；
@@ -242,8 +242,8 @@ host 时间永远来自实际接收/动作窗口；`device_ts` 只原样保存�
 | audio-runtime | play/record receipt | `HOST_AUDIO_*`、`RECORD_START/END` |
 | tts-runtime | `USAGE`/`FAIL`/`UNSUPPORTED`/`BACKEND` | `TOOL_ERROR` / `TTS_ERROR` / `BACKEND_UNAVAILABLE` |
 | tts-runtime | `start/progress/item_result/complete` | 归入 `TTS_START/TTS_END`；不直接复用其小写事件名 |
-| venusahisiburner | `preflight/boot/burn/verify/recover/receipt`、`PASS/FAIL/BLOCKED/SKIPPED` | `FLASH_PREFLIGHT`、`BOOT_STRAP_*`、`BURN_*`、`VERIFY_VERSION`、`RESET` |
-| venusahisiburner | `Flash Init Fail 0x80001341`、`AT+FTM=0`、`setloglev` | `BOOT_FAIL`、`FTM_MODE_ENTER/EXIT`、`DEVICE_MODE` |
+| burner | `preflight/boot/burn/verify/recover/receipt`、`PASS/FAIL/BLOCKED/SKIPPED` | `FLASH_PREFLIGHT`、`BOOT_STRAP_*`、`BURN_*`、`VERIFY_VERSION`、`RESET` |
+| burner | `Flash Init Fail 0x80001341`、`AT+FTM=0`、`setloglev` | `BOOT_FAIL`、`FTM_MODE_ENTER/EXIT`、`DEVICE_MODE` |
 | ark-node probe | `dns/https` 布尔、工具 `present/absent` | `NET_UP`/`NET_DOWN` 只作参考；能力画像不是事件流 |
 | NOAH-57 台架 | `POWER_PASS/FAIL/BLOCKED`、`RECORD_PASS/FAIL/BLOCKED` | 保留 `kind=judgement`、`scope=bench`；不进入通用 gate |
 
