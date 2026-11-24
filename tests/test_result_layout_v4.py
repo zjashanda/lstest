@@ -42,7 +42,7 @@ class ResultLayoutTests(unittest.TestCase):
         self.assertEqual(payload["schema"], TASK_SCHEMA)
         self.assertEqual(payload["task"]["status"], "running")
         self.assertEqual(payload["artifacts"], [])
-        self.assertIn("generated_at_utc", payload)
+        self.assertRegex(payload["generated_at"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 
     def test_final_manifest_covers_the_fixed_layout(self):
         artifacts = self.build()

@@ -1,4 +1,4 @@
-"""Serial attach/detach session ledger (NoahsArk serial lifecycle baseline).
+﻿"""Serial attach/detach session ledger (NoahsArk serial lifecycle baseline).
 
 Only two detach reasons are legal:
 
@@ -61,7 +61,7 @@ class IllegalDetach(SerialSessionError):
 
 
 def now_iso() -> str:
-    return datetime.now().astimezone().isoformat(timespec="milliseconds")
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _parse_iso(value: Optional[str]) -> Optional[datetime]:

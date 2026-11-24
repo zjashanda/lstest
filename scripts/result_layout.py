@@ -1,4 +1,4 @@
-"""结果目录布局 v3：canonical 路径、旧布局 resolver、迁移与 manifest。
+﻿"""结果目录布局 v3：canonical 路径、旧布局 resolver、迁移与 manifest。
 
 最终布局（郑保山 2026-11-13 授权）：
 
@@ -539,8 +539,7 @@ def write_task_manifest(run_dir: Path | str, *, task_id: str | None = None,
     payload: dict[str, Any] = {
         "schema": TASK_SCHEMA,
         "layout": LAYOUT_V4,
-        "generated_at": now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}" + "+08:00",
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+        "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "task": {
             "task_id": task_id or root.name,
             "node": os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "",
