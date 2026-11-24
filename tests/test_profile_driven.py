@@ -1,4 +1,4 @@
-import json
+﻿import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -66,7 +66,7 @@ class ProfileDrivenTests(unittest.TestCase):
             root = Path(directory)
             for profile_id, capture, marker in (("first", "token_a", "alpha-marker"), ("second", "token_b", "beta-marker")):
                 profile = self._profile(root, profile_payload(profile_id, capture, marker))
-                artifacts = TaskArtifacts(root, profile_id)
+                artifacts = TaskArtifacts(root / profile_id, profile_id)
                 runtime = ScenarioRuntime(artifacts, profile=profile)
                 case = CaseSpec("case", metadata={"timeline": {"required_facts": ["OFFLINE_ASR", "PLAYER"]}})
                 runtime.freeze_cases([case], profile_version=profile.schema_version, profile_sha256=profile.sha256)

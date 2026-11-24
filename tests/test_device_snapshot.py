@@ -1,4 +1,4 @@
-"""`--device-snapshot` 解析与主入口接线测试，全部离线、不触碰硬件。"""
+﻿"""`--device-snapshot` 解析与主入口接线测试，全部离线、不触碰硬件。"""
 
 from __future__ import annotations
 
@@ -183,7 +183,7 @@ class DeviceSnapshotCliTests(unittest.TestCase):
         self.assertNotIn("device_snapshot", payload)
         self.assertEqual(payload["connection"]["ports"], [{
             "port": "COM9", "baudrate": 115200, "role": "ap",
-            "capabilities": [], "required_for": [],
+            "capabilities": [], "required_for": [], "device": None,
         }])
 
     def test_without_flag_empty_ports_profile_stays_empty(self):

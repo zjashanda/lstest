@@ -1,10 +1,12 @@
-"""Core task, connection, evidence, and scenario contracts for lstest."""
+﻿"""Core task, connection, evidence, and scenario contracts for lstest."""
 
 from __future__ import annotations
 
 import csv
 import hashlib
 import json
+import os
+import re
 import sys
 import shutil
 import threading
@@ -91,6 +93,25 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def safe_segment(value: Any, fallback: str) -> str:
+    """路径片段清洗：去掉 Windows/Linux 非法字符，保留中文设备名。"""
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", str(value or "")).strip(" -._")
+    return text or fallback
+
+
+def split_serial_role(role: str | None) -> tuple[str, str]:
+    """把逻辑角色映射为 (串口名, 端口字母)：CSK6_A -> ("csk","a")。"""
+    text = str(role or "").strip().lower()
+    if "csk" in text:
+        bus = "csk"
+    elif "hisi" in text:
+        bus = "hisi"
+    else:
+        bus = "other"
+    match = re.search(r"([a-d])\s*$", text.replace("_", " ").replace("-", " ").strip())
+    return bus, (match.group(1) if match else "na")
+
+
 @dataclass(frozen=True)
 class PortSpec:
     port: str
@@ -98,6 +119,7 @@ class PortSpec:
     role: str | None = None
     capabilities: tuple[str, ...] = ()
     required_for: tuple[str, ...] = ()
+    device: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -366,9 +388,12 @@ class TaskArtifacts:
         layout: str | None = None,
     ):
         self.layout = layout or (
-            result_layout.LAYOUT_V3 if structured_events else result_layout.LAYOUT_V1
+            result_layout.LAYOUT_V3 if structured_events else result_layout.LAYOUT_V4
         )
-        if run_name:
+        if self.layout == result_layout.LAYOUT_V4:
+            self.run_dir = Path(result_root)
+            self.run_dir.mkdir(parents=True, exist_ok=True)
+        elif run_name:
             self.run_dir = Path(result_root) / run_name
             self.run_dir.mkdir(parents=True, exist_ok=True)
         else:
@@ -381,7 +406,10 @@ class TaskArtifacts:
                 suffix += 1
             self.run_dir = candidate
         result_layout.ensure_dirs(self.run_dir, self.layout)
-        self.task_id = self.run_dir.name
+        self.task_id = task_slug if self.layout == result_layout.LAYOUT_V4 else self.run_dir.name
+        self.run_stamp = now_dt().strftime("%Y%m%d%H%M")
+        raw_device = os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "node"
+        self.device_name = safe_segment(raw_device, "node").lower()
         if self.layout == result_layout.LAYOUT_V3:
             self.tool_log_path = result_layout.path(
                 self.run_dir, "tool_live" if structured_events else "tool_log", self.layout
@@ -1637,10 +1665,18 @@ class TaskArtifacts:
         self.closed = True
         return summary
 
-    def serial_log_path(self, port: str, role: str | None) -> Path:
-        safe_port = str(port).replace("/", "_").replace("\\", "_")
-        safe_role = str(role or "unknown").replace("/", "_").replace("\\", "_")
-        return self.run_dir / self.serial_rel_dir / f"serial_{safe_port}_{safe_role}.log"
+    def serial_log_path(self, port: str, role: str | None, device: str | None = None) -> Path:
+        safe_port = safe_segment(port, "PORT")
+        bus, letter = split_serial_role(role)
+        device_name = safe_segment(device or self.device_name, "device")
+        return self.run_dir / self.serial_rel_dir / f"{self.run_stamp}_{device_name}_{safe_port}_{bus}_{letter}.log"
+
+    def write_task_manifest(self, **kwargs: Any) -> Path:
+        """写 v4 ``task.json``；v1/v2/v3 布局下退化为 manifest.json。"""
+        if self.layout == result_layout.LAYOUT_V4:
+            kwargs.setdefault("task_id", self.task_id)
+            return result_layout.write_task_manifest(self.run_dir, **kwargs)
+        return result_layout.write_manifest(self.run_dir, task_id=kwargs.get("task_id") or self.task_id)
 
 
 class DeviceRuntime:

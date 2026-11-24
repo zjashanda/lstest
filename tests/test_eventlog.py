@@ -1,4 +1,4 @@
-"""结构化事件日志 v2 的回归测试。
+﻿"""结构化事件日志 v2 的回归测试。
 
 覆盖：真实日志 golden（TOOL + DEVICE 单行时序）、旧格式容错、三层产物、
 双成功率、gate 与最终判定分离、tool.log 单行/毫秒/排序/去重/未知行、
@@ -485,9 +485,9 @@ class SerialTimestampTests(unittest.TestCase):
             manager = SerialManager(spec.ports, artifacts, factory=FakeSerial)
             manager.start()
             time.sleep(0.05)
-            manager.stop()
+            manager.finish("TASK_DONE", "fixture complete")
             artifacts.finalize("PASS", "fixture complete")
-            log = artifacts.run_dir / "serial_logs" / "serial_COM1_csk.log"
+            log = artifacts.serial_log_path("COM1", "csk")
             content = log.read_text(encoding="utf-8")
             match = re.search(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\] COM1 csk #1 ", content, re.M)
             self.assertIsNotNone(match, content)
