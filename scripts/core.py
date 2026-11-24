@@ -1,4 +1,4 @@
-﻿"""Core task, connection, evidence, and scenario contracts for lstest."""
+"""Core task, connection, evidence, and scenario contracts for lstest."""
 
 from __future__ import annotations
 
@@ -28,6 +28,8 @@ except ImportError:  # direct execution fallback
     from timeline import TimelineLedger, ToolLogValidator, safe_basename
 
 BEIJING = timezone(timedelta(hours=8))
+TASK_SCHEMA = result_layout.TASK_SCHEMA
+RESULT_LAYOUT = result_layout.ROOT_ALLOWED_V4
 STICKY_FATAL_MARKERS = {
     "PANIC", "CRASH", "ASSERT", "WATCHDOG_RESET", "UNEXPECTED_REBOOT",
     "DATA_CORRUPTION", "SERIAL_LOSS", "TOOL_EXCEPTION",
