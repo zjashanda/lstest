@@ -1739,10 +1739,23 @@ class TaskArtifacts:
         self.closed = True
         return summary
 
+    BURN_ROLES = frozenset({"burn", "burn_tool", "burntool"})
+
     def serial_log_path(self, port: str, role: str | None, device: str | None = None) -> Path:
         safe_port = safe_segment(port, "PORT")
         bus, letter = split_serial_role(role)
         device_name = safe_segment(device or self.device_name, "device")
+        role_text = str(role or "").strip().lower()
+        if self.layout == result_layout.LAYOUT_V4 and role_text in self.BURN_ROLES:
+            # 烧录等外部工具的原始输出单独落 burn_logs，不进 serial_logs，也不进 tool.log
+            cached = getattr(self, "_burn_paths", None)
+            if cached is None:
+                cached = {}
+                self._burn_paths = cached
+            key = f"{role_text}:{self.current_epoch}"
+            if key not in cached:
+                cached[key] = self.burn_log_path("burn", self.next_burn_seq())
+            return cached[key]
         return self.run_dir / self.serial_rel_dir / f"{self.run_stamp}_{device_name}_{safe_port}_{bus}_{letter}.log"
 
     def burn_log_path(self, tool: str = "burn", seq: int = 1) -> Path:
@@ -1752,6 +1765,14 @@ class TaskArtifacts:
         stamp = now_dt().strftime("%Y%m%d%H%M")
         safe_tool = "".join(ch for ch in str(tool or "burn") if ch.isalnum() or ch in "-_") or "burn"
         return folder / f"{stamp}_{safe_tool}_{int(seq)}.log"
+
+    def next_burn_seq(self) -> int:
+        """本次任务内第几次烧录（用于 burn_logs 文件名）。"""
+        folder = self.run_dir / "burn_logs"
+        folder.mkdir(parents=True, exist_ok=True)
+        existing = len(list(folder.glob("*_burn_*.log")))
+        allocated = len(getattr(self, "_burn_paths", {}) or {})
+        return max(existing, allocated) + 1
 
     def blank_line(self) -> None:
         """轮次之间留空行，便于人工阅读。"""
