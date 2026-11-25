@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from collections import Counter
@@ -553,6 +554,7 @@ class ToolLogValidator:
                         errors.append(f"第 {number} 行使用未注册标签 {tag}")
                     continue
                 if self.MARKER_LINE.match(line):
+                    errors.append(f"第 {number} 行标记缺少时间戳（必须经 emit_markers 写入）")
                     continue
                 errors.append(f"第 {number} 行时间戳或标签不符合固定格式")
                 continue
@@ -642,6 +644,15 @@ class ToolLogValidator:
             tool = root / "tool.log"
             if tool.is_file():
                 errors.extend(self.validate_path(tool))
+            manifest = root / "task.json"
+            if manifest.is_file():
+                try:
+                    payload = json.loads(manifest.read_text(encoding="utf-8"))
+                    task_id = str((payload.get("task") or {}).get("task_id") or "")
+                except (OSError, ValueError):
+                    task_id = ""
+                if task_id and task_id != root.name:
+                    errors.append(f"task.json task_id={task_id} 与运行目录名 {root.name} 不一致")
         elif layout == result_layout.LAYOUT_V4:
             required = {"tool.log", "results.csv", "cases.csv", "serial_logs", "burn_logs", "task.json"}
             runs = [name for name in actual if re.fullmatch(r"\d{12}(-\d{2})?", name)]

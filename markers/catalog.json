@@ -74,13 +74,15 @@
       "code": "wakeMode",
       "category": "wake",
       "desc": "算法模式切换（wakeup/asr）",
-      "display": []
+      "display": [],
+      "log_policy": "change"
     },
     {
       "code": "algoMode",
       "category": "wake",
       "desc": "算法工作模式编号",
-      "display": []
+      "display": [],
+      "log_policy": "change"
     },
     {
       "code": "asrResult",
@@ -104,7 +106,8 @@
       "code": "vad",
       "category": "wake",
       "desc": "VAD 起止",
-      "display": []
+      "display": [],
+      "log_policy": "change"
     },
     {
       "code": "playStart",
@@ -164,13 +167,15 @@
       "code": "volume",
       "category": "media",
       "desc": "当前音量",
-      "display": []
+      "display": [],
+      "log_policy": "change"
     },
     {
       "code": "volumeSet",
       "category": "media",
       "desc": "音量变更",
-      "display": []
+      "display": [],
+      "log_policy": "change"
     },
     {
       "code": "audioSha256",
@@ -200,7 +205,8 @@
       "code": "pa",
       "category": "player",
       "desc": "PA 开关",
-      "display": []
+      "display": [],
+      "log_policy": "change"
     },
     {
       "code": "playerGain",
@@ -302,7 +308,8 @@
       "code": "heap",
       "category": "device",
       "desc": "内存水位",
-      "display": []
+      "display": [],
+      "log_policy": "summary"
     },
     {
       "code": "reset",
@@ -428,7 +435,8 @@
       "code": "watchdog",
       "category": "fault",
       "desc": "看门狗复位",
-      "display": []
+      "display": [],
+      "log_policy": "summary"
     },
     {
       "code": "unexpectedReboot",
@@ -518,19 +526,22 @@
       "code": "protoTx",
       "category": "protocol",
       "desc": "协议帧发送",
-      "display": []
+      "display": [],
+      "log_policy": "summary"
     },
     {
       "code": "protoRx",
       "category": "protocol",
       "desc": "协议帧接收",
-      "display": []
+      "display": [],
+      "log_policy": "summary"
     },
     {
       "code": "volumeLevel",
       "category": "media",
       "desc": "音量档位配置(0-4)",
-      "display": []
+      "display": [],
+      "log_policy": "change"
     }
   ]
 }

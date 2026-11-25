@@ -142,6 +142,76 @@ class LedgerFormatTests(unittest.TestCase):
         self.assertIn("播报", self.last_line())
 
 
+class MarkerPolicyTests(unittest.TestCase):
+    def _extract(self, policy_map):
+        from lstest.scripts import markers as mk
+
+        catalog = {code: mk.MarkerSpec(code=code, category="wake", desc="", log_policy=policy)
+                   for code, policy in policy_map.items()}
+        return mk.MarkerBuffer(catalog)
+
+    def _hit(self, code, value="1"):
+        from lstest.scripts import markers as mk
+
+        return mk.MarkerHit(code=code, device="csk", port="COM4", value=value)
+
+    def test_always_writes_every_hit(self):
+        buf = self._extract({"intent": "always"})
+        self.assertTrue(buf.feed(self._hit("intent", "a")))
+        self.assertTrue(buf.feed(self._hit("intent", "a")))
+
+    def test_change_writes_once_per_value(self):
+        buf = self._extract({"algoMode": "change"})
+        self.assertTrue(buf.feed(self._hit("algoMode", "1")))
+        self.assertFalse(buf.feed(self._hit("algoMode", "1")))
+        self.assertTrue(buf.feed(self._hit("algoMode", "0")))
+
+    def test_summary_defers_and_flushes(self):
+        buf = self._extract({"protoRx": "summary"})
+        for value in ("A5 FA 01", "A5 FA 02", "A5 FA 01"):
+            self.assertFalse(buf.feed(self._hit("protoRx", value)))
+        flushed = buf.flush()
+        self.assertEqual(len(flushed), 1)
+        device, port, text = flushed[0]
+        self.assertEqual((device, port), ("csk", "COM4"))
+        self.assertIn("protoRx: 共 3 条", text)
+        self.assertIn("A5 FA 01 x2", text)
+
+    def test_marker_lines_go_through_emit_with_timestamp(self):
+        from lstest.scripts import markers as mk
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "result"
+            artifacts = TaskArtifacts(root, "NOAH-999", layout=LAYOUT_V4)
+            artifacts.emit_markers([mk.MarkerHit(code="intent", device="csk", port="COM4",
+                                                 value="hai3 xin4")])
+            artifacts.finalize("PASS", "x")
+            text = (artifacts.run_dir / "tool.log").read_text(encoding="utf-8")
+            self.assertIn("[MARK] csk(COM4): intent: hai3 xin4", text)
+            self.assertRegex(text, r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - INFO\s - \[MARK\]")
+
+    def test_bare_marker_is_rejected_by_validator(self):
+        from lstest.scripts.timeline import ToolLogValidator
+
+        errors = ToolLogValidator().validate_text("  csk(COM4): watchdog: 2915\n")
+        self.assertTrue(any("缺少时间戳" in e for e in errors), errors)
+
+    def test_task_id_mismatch_is_reported(self):
+        import json as _json
+        from lstest.scripts.timeline import ToolLogValidator
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "202611251540"
+            (run / "serial_logs").mkdir(parents=True)
+            (run / "burn_logs").mkdir()
+            (run / "tool.log").write_text("2026-11-25 15:40:04,962 - INFO  - [TASK] start\n", encoding="utf-8")
+            (run / "cases.csv").write_text("case_order,case_id\n1,G1\n", encoding="utf-8")
+            (run / "results.csv").write_text("case_id,status\nG1,PASS\n", encoding="utf-8")
+            (run / "task.json").write_text(_json.dumps({"task": {"task_id": "hisense001_10rounds"}}), encoding="utf-8")
+            errors = ToolLogValidator().validate_run(run)
+            self.assertTrue(any("不一致" in e for e in errors), errors)
+
+
 class RunDirLayoutTests(unittest.TestCase):
     def _make_run(self, root: Path, stamp: str = "202611251447") -> Path:
         run = root / stamp

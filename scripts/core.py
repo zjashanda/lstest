@@ -450,6 +450,7 @@ class TaskArtifacts:
         )
         self.tool_log_style = "ledger" if self.layout == result_layout.LAYOUT_V4 else "legacy"
         self.state_extension = state_extension
+        self._marker_buffer: Any | None = None
         self._event_log_failed = False
         self.structured_summary: dict[str, Any] | None = None
         self._tool = self.tool_log_path.open("a", encoding="utf-8")
@@ -680,6 +681,7 @@ class TaskArtifacts:
         "TASK": "TASK", "TASK_STARTED": "TASK", "TASK_PROGRESS": "TASK",
         "TASK_FINISHED": "TASK", "TASK_CONFIG": "TASK", "PREFLIGHT": "TASK",
         "ACTION": "ACTION", "ACTION_DONE": "ACTION", "TOOL_CALL": "ACTION",
+        "MARK": "MARK", "MARKERS": "MARK", "MARKER_SUMMARY": "MARK",
         "ENV": "ENV", "CASES_FROZEN": "CASES", "LAZY_CASE_DECLARED": "CASES",
         "CASE_WINDOW_CLOSED": "CASES", "CASE_CHECK": "CASE",
         "SERIAL_OPEN": "SERIAL", "SERIAL_CLOSE": "SERIAL", "SERIAL_RECONNECT": "SERIAL",
@@ -1717,6 +1719,10 @@ class TaskArtifacts:
                 closer()
             except Exception as error:  # cleanup must remain visible, never hide the result
                 self.add_sticky("TOOL_EXCEPTION", f"资源收尾失败: {name}", resource=name, error=str(error))
+        try:
+            self.flush_markers()
+        except Exception:  # noqa: BLE001 - 汇总失败不得改变任务结论
+            pass
         reconciliation = self._reconcile_results()
         self.counts = dict(reconciliation["counts"])
         final_status = status
@@ -1851,6 +1857,37 @@ class TaskArtifacts:
                 continue
             parts.append(f"{key}={self._text(value)}")
         self.emit("ACTION", level=level, message=" ".join(parts), task_log=True)
+
+    def emit_markers(self, hits: Any, *, level: str = "INFO") -> int:
+        """把标记位写进 tool.log，统一带时间戳与 [MARK] tag，并按码表策略抑制刷屏。
+
+        返回实际写入的行数。项目必须走这里，不要自己拼缩进标记行。
+        """
+        if self._marker_buffer is None:
+            from .markers import MarkerBuffer, load_catalog
+            try:
+                catalog = load_catalog(Path(__file__).resolve().parent.parent / "markers" / "catalog.json")
+            except (OSError, ValueError):
+                catalog = {}
+            self._marker_buffer = MarkerBuffer(catalog)
+        written = 0
+        for hit in hits or ():
+            if not self._marker_buffer.feed(hit):
+                continue
+            text = f"{hit.device}({hit.port}): {hit.text()}"
+            self.emit("MARK", level=level, message=text)
+            written += 1
+        return written
+
+    def flush_markers(self) -> int:
+        """窗口/任务收尾时输出 summary 类标记的汇总行。"""
+        if self._marker_buffer is None:
+            return 0
+        written = 0
+        for device, port, text in self._marker_buffer.flush():
+            self.emit("MARK", message=f"{device}({port}): {text}")
+            written += 1
+        return written
 
     def emit_paths(self, *, assets: str = "", tools: str = "", repos: str = "") -> None:
         """开头登记本次运行使用的数据与工具目录，便于事后定位来源。"""

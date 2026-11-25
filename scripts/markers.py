@@ -28,6 +28,7 @@ class MarkerSpec:
     category: str
     desc: str
     display: tuple[str, ...] = ()
+    log_policy: str = "always"   # always | change | summary
 
 
 @dataclass
@@ -49,7 +50,14 @@ class MarkerHit:
     value: str
     extra: dict[str, str] = field(default_factory=dict)
 
+    def text(self) -> str:
+        """标记正文（不含时间戳前缀），供 core.emit_markers 包装成流水账行。"""
+        if self.extra:
+            return "; ".join(f"{key}: {value}" for key, value in self.extra.items())
+        return f"{self.code}: {self.value}".rstrip(": ")
+
     def lines(self) -> list[str]:
+        """兼容旧调用：带缩进的裸标记行。新代码请用 core.emit_markers()。"""
         if self.extra:
             return [f"{INDENT}{self.device}({self.port}): {key}: {value}".rstrip(": ")
                     for key, value in self.extra.items()]
@@ -70,6 +78,7 @@ def load_catalog(path: Path | str) -> dict[str, MarkerSpec]:
             category=str(item.get("category") or ""),
             desc=str(item.get("desc") or ""),
             display=tuple(item.get("display") or ()),
+            log_policy=str(item.get("log_policy") or "always"),
         )
     return specs
 
@@ -203,6 +212,51 @@ class MarkerExtractor:
         for key in display:
             if key in payload:
                 out[key] = str(payload[key])
+        return out
+
+
+class MarkerBuffer:
+    """按码表的 log_policy 决定标记是否落盘，抑制刷屏。
+
+    always  : 每条都写
+    change  : 值变化时才写（首次必写）
+    summary : 不逐条写，flush() 时输出一行汇总
+    """
+
+    def __init__(self, catalog: Mapping[str, MarkerSpec]) -> None:
+        self.catalog = dict(catalog)
+        self._last: dict[tuple[str, str, str], str] = {}
+        self._pending: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    def feed(self, hit: MarkerHit) -> bool:
+        spec = self.catalog.get(hit.code)
+        policy = spec.log_policy if spec else "always"
+        key = (hit.device, hit.port, hit.code)
+        if policy == "summary":
+            bucket = self._pending.setdefault(key, {"count": 0, "values": {}})
+            bucket["count"] += 1
+            bucket["values"][hit.value] = bucket["values"].get(hit.value, 0) + 1
+            return False
+        if policy == "change":
+            if self._last.get(key) == hit.value:
+                return False
+            self._last[key] = hit.value
+            return True
+        return True
+
+    def flush(self) -> list[tuple[str, str, str]]:
+        """返回 (device, port, 汇总正文)。"""
+        out: list[tuple[str, str, str]] = []
+        for (device, port, code), bucket in self._pending.items():
+            count = bucket["count"]
+            if not count:
+                continue
+            values = sorted(bucket["values"].items(), key=lambda kv: -kv[1])
+            distinct = len(values)
+            top = ", ".join(f"{value} x{n}" for value, n in values[:3])
+            more = "" if distinct <= 3 else f" 等 {distinct} 种"
+            out.append((device, port, f"{code}: 共 {count} 条{more}；{top}"))
+        self._pending.clear()
         return out
 
 
