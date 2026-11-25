@@ -648,7 +648,8 @@ class ToolLogValidator:
                 if tool.is_file():
                     errors.extend(self.validate_path(tool))
         else:
-            expected_files = {"tool.log", "results.csv", "cases.csv", "serial_logs"}
+            expected_files = {"tool.log", "results.csv", "cases.csv", "serial_logs",
+                              "burn_logs", "task.json"}
             unexpected = actual - expected_files - {"STOP", "cloud_run"} - set(result_layout.LEGACY_ROOT_FILES)
             if unexpected:
                 errors.append("存在非标准运行产物: " + ", ".join(sorted(unexpected)))

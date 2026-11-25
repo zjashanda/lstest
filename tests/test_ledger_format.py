@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -29,18 +28,21 @@ class LedgerFormatTests(unittest.TestCase):
     def read_tool(self) -> str:
         return self.artifacts.tool_log_path.read_text(encoding="utf-8")
 
+    def last_line(self) -> str:
+        return self.read_tool().strip().splitlines()[-1]
+
     def test_line_format_is_asctime_level_tag(self):
         self.artifacts.emit("SERIAL_OPEN", message="串口 COM6 已打开", port="COM6", role="CSK6_A", baudrate=115200)
-        line = self.read_tool().strip().splitlines()[-1]
-        self.assertRegex(line, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - INFO\s - \[SERIAL\] 串口 COM6 已打开")
-        self.assertIn("port=COM6", line)
-        self.assertIn("role=CSK6_A", line)
-        self.assertIn("baudrate=115200", line)
+        line = self.last_line()
+        self.assertRegex(line, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - INFO\s - \[SERIAL\]")
+        self.assertIn("COM6(CSK6_A)", line)
+        self.assertIn("串口 COM6 已打开", line)
+        self.assertNotIn("channel=", line)
+        self.assertNotIn("port=COM6", line)
 
     def test_level_is_padded_and_error_kept(self):
         self.artifacts.emit("SERIAL_LOSS", level="ERROR", message="COM6 丢失", port="COM6")
-        line = self.read_tool().strip().splitlines()[-1]
-        self.assertIn(" - ERROR - [SERIAL] ", line)
+        self.assertIn(" - ERROR - [SERIAL] ", self.last_line())
 
     def test_round_blank_line(self):
         self.artifacts.emit("CASES_FROZEN", message="用例已冻结", round=1)
@@ -65,6 +67,26 @@ class LedgerFormatTests(unittest.TestCase):
         self.artifacts.emit("SERIAL_LINE", message="[D][algo_task] play start", task_log=False,
                             port="COM6", role="CSK6_A", line="[D][algo_task] play start")
         self.assertNotIn("play start", self.read_tool())
+
+    def test_no_duplicate_value_in_tail(self):
+        self.artifacts.emit("CASE_CHECK", message="switchIdx: 0", channel="奥普001(COM5)", round=1)
+        line = self.last_line()
+        self.assertEqual(line.count("switchIdx: 0"), 1)
+        self.assertNotIn("channel=", line)
+
+    def test_emit_action_is_one_ledger_line(self):
+        self.artifacts.emit_action("play_audio", detail="wake_tmall.wav", sha256="abc123", gain=1.0)
+        line = self.last_line()
+        self.assertIn("[ACTION]", line)
+        self.assertIn("action=play_audio", line)
+        self.assertIn("wake_tmall.wav", line)
+        self.assertIn("gain=1.0", line)
+        self.assertNotIn("channel=", line)
+
+    def test_timeline_lines_use_ledger_format(self):
+        self.artifacts.timeline.system("任务开始: task=NOAH-999")
+        line = self.last_line()
+        self.assertRegex(line, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - INFO\s - \[TASK\] 任务开始")
 
 
 if __name__ == "__main__":

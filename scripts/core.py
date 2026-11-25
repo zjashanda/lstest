@@ -502,11 +502,28 @@ class TaskArtifacts:
             epoch=self.current_epoch,
         )
 
+    _TIMELINE_TAGS = {
+        "SYSTEM": "TASK", "CASE": "CASE", "ACTION": "ACTION", "DEVICE": "MARK",
+        "ONLINE": "PLAY", "PLAYER": "PLAY", "COMMAND": "CONTROL", "RESULT": "RESULT",
+        "SUMMARY": "TASK", "ERROR": "ANOMALY",
+    }
+
+    def _normalize_own_line(self, line: str) -> str:
+        """v4 下把渲染器自带的行统一成 ledger 格式，避免两种格式混排。"""
+        if getattr(self, "tool_log_style", "ledger") != "ledger":
+            return line
+        match = re.match(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:,\d{3})? \[([A-Z]+)\]\s*(.*)$", line)
+        if not match:
+            return line
+        tag = self._TIMELINE_TAGS.get(match.group(2), "TASK")
+        body = match.group(3).rstrip("\n")
+        return f"{now_ms()} - INFO  - [{tag}] {body}\n"
+
     def _append_timeline_line(self, line: str) -> None:
         """Write renderer-owned lines atomically and flush them for live review."""
         with self._lock:
             try:
-                self._tool.write(line)
+                self._tool.write(self._normalize_own_line(line))
                 self._tool.flush()
             except OSError as error:
                 # The result log is the auditable evidence source.  A failure
@@ -662,6 +679,7 @@ class TaskArtifacts:
     _LEDGER_TAGS = {
         "TASK": "TASK", "TASK_STARTED": "TASK", "TASK_PROGRESS": "TASK",
         "TASK_FINISHED": "TASK", "TASK_CONFIG": "TASK", "PREFLIGHT": "TASK",
+        "ACTION": "ACTION", "ACTION_DONE": "ACTION", "TOOL_CALL": "ACTION",
         "ENV": "ENV", "CASES_FROZEN": "CASES", "LAZY_CASE_DECLARED": "CASES",
         "CASE_WINDOW_CLOSED": "CASES", "CASE_CHECK": "CASE",
         "SERIAL_OPEN": "SERIAL", "SERIAL_CLOSE": "SERIAL", "SERIAL_RECONNECT": "SERIAL",
@@ -693,35 +711,33 @@ class TaskArtifacts:
         """tool.log 主格式：asctime - LEVEL - [TAG] message [k=v ...]"""
         name = str(event or "EVENT").upper()
         tag = self._LEDGER_TAGS.get(name, "TASK")
+        body = str(message or name)
         port_role = str(known.get("port_role") or "")
-        if port_role:
+        device_prefix = ""
+        prefix_match = re.match(r"^\[([^\]]+\([^)]*\))\]\s*\|\s*", body)
+        if prefix_match:
+            device_prefix = prefix_match.group(1)
+            body = body[prefix_match.end():]
+        elif port_role:
             head, _, tail_role = port_role.partition("/")
-            if head:
-                tail_pairs_seed = [f"port={head}"]
-                if tail_role:
-                    tail_pairs_seed.append(f"role={tail_role}")
-            else:
-                tail_pairs_seed = []
-        else:
-            tail_pairs_seed = []
-        tail_pairs = list(tail_pairs_seed)
-        for key in ("round", "case_id", "status", "reason", "attempt", "max_attempts",
-                    "elapsed_ms", "baudrate", "channel", "code"):
+            if head and head.upper() != "CONTROL":
+                device_prefix = f"{head}({tail_role})" if tail_role else head
+        tail_pairs = []
+        for key in ("round", "case_id", "status", "reason", "attempt", "max_attempts", "elapsed_ms"):
             value = known.get(key)
             if value in (None, "", [], {}):
                 continue
-            tail_pairs.append(f"{key}={self._text(value)}")
-        details = known.get("details")
-        if isinstance(details, Mapping):
-            for key, value in details.items():
-                if value in (None, "", [], {}):
-                    continue
-                tail_pairs.append(f"{key}={self._text(value)}")
-        body = str(message or name)
-        tail = " ".join(tail_pairs)
-        if tail:
-            body = f"{body} {tail}"
-        return f"{now_ms()} - {level.upper():<5} - [{tag}] {body}\n"
+            rendered = self._text(value)
+            if f"{key}={rendered}" in body or rendered in body:
+                continue
+            tail_pairs.append(f"{key}={rendered}")
+        head_text = f"[{tag}]"
+        if device_prefix:
+            head_text = f"[{tag}] {device_prefix}:"
+        line = f"{now_ms()} - {level.upper():<5} - {head_text} {body}"
+        if tail_pairs:
+            line = f"{line} " + " ".join(tail_pairs)
+        return line.rstrip() + "\n"
 
     def _render_tool_line(self, event: str, level: str, message: str, known: Mapping[str, Any]) -> str:
         """Render the compact, two-layer human ledger.
@@ -1781,6 +1797,17 @@ class TaskArtifacts:
         existing = len(list(folder.glob("*_burn_*.log")))
         allocated = len(getattr(self, "_burn_paths", {}) or {})
         return max(existing, allocated) + 1
+
+    def emit_action(self, action: str, *, detail: str = "", level: str = "INFO", **fields: Any) -> None:
+        """记录一条脚本/工具动作（流水账）：谁在什么时间做了什么。"""
+        payload = ["action=" + str(action)]
+        if detail:
+            payload.append(str(detail))
+        for key, value in fields.items():
+            if value in (None, "", [], {}):
+                continue
+            payload.append(f"{key}={self._text(value)}")
+        self.emit("ACTION", level=level, message=" ".join(payload), task_log=True)
 
     def blank_line(self) -> None:
         """轮次之间留空行，便于人工阅读。"""

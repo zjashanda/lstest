@@ -321,8 +321,6 @@ def detect_layout(run_dir: Path | str) -> str:
     actual = {item.name for item in root.iterdir()}
     if not actual:
         return LAYOUT_V3
-    if "task.json" in actual or "burn_logs" in actual:
-        return LAYOUT_V4
     for name in actual:
         if re.fullmatch(r"\d{12}(-\d{2})?", name):
             child = root / name
