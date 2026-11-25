@@ -85,6 +85,16 @@ def _sources_of(rule: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(str(item) for item in items)
 
 
+def load_profile_capabilities(profile_path: Path | str) -> dict[str, Any]:
+    """读取 profile 声明的机型能力；未声明返回空字典。"""
+    try:
+        payload = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    declared = payload.get("capabilities")
+    return dict(declared) if isinstance(declared, Mapping) else {}
+
+
 def load_rules(profile_path: Path | str, catalog: Mapping[str, MarkerSpec] | None = None) -> list[MarkerRule]:
     payload = json.loads(Path(profile_path).read_text(encoding="utf-8"))
     rules: list[MarkerRule] = []
@@ -127,11 +137,14 @@ class MarkerExtractor:
         self.catalog = dict(catalog)
         self.rules = list(rules)
         self.missing: set[tuple[str, str]] = set()
+        self.capabilities: dict[str, Any] = {}
 
     @classmethod
     def from_paths(cls, catalog_path: Path | str, profile_path: Path | str) -> "MarkerExtractor":
         catalog = load_catalog(catalog_path)
-        return cls(catalog, load_rules(profile_path, catalog))
+        extractor = cls(catalog, load_rules(profile_path, catalog))
+        extractor.capabilities = load_profile_capabilities(profile_path)
+        return extractor
 
     def match(self, role: str, port: str, text: str) -> list[MarkerHit]:
         hits: list[MarkerHit] = []
@@ -151,7 +164,9 @@ class MarkerExtractor:
 
     def report_missing(self, role: str) -> list[str]:
         configured = {rule.code for rule in self.rules if not rule.sources or role in rule.sources}
-        absent = [code for code in self.catalog if code not in configured]
+        skip_categories = set(self.capabilities.get("markers_absent") or ())
+        absent = [code for code in self.catalog if code not in configured
+                  and getattr(self.catalog[code], "category", "") not in skip_categories]
         for code in absent:
             self.missing.add((role, code))
         return absent

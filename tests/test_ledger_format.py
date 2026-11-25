@@ -124,5 +124,64 @@ class LedgerFormatTests(unittest.TestCase):
         self.assertRegex(line, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - INFO\s - \[TASK\] 任务开始")
 
 
+class CapabilityBaselineTests(unittest.TestCase):
+    def test_absent_capability_skips_playback_requirement(self):
+        from lstest.scripts.interaction_acceptance import evaluate_round
+
+        ok, reason = evaluate_round("hit", "wake_playback", wake_playback_count=0,
+                                    capabilities={"wake_playback": False})
+        self.assertTrue(ok, reason)
+
+    def test_default_capability_still_requires_playback(self):
+        from lstest.scripts.interaction_acceptance import evaluate_round
+
+        ok, reason = evaluate_round("hit", "wake_playback", wake_playback_count=0)
+        self.assertFalse(ok)
+        self.assertIn("未观察到唤醒播报", reason)
+
+    def test_baseline_flags_only_the_minority(self):
+        from lstest.scripts.interaction_acceptance import baseline_missing
+
+        rows = [
+            {"case_id": "G7", "features": {"wake_result": True, "protocol_frame": True}},
+            {"case_id": "G8", "features": {"wake_result": True, "protocol_frame": True}},
+            {"case_id": "G9", "features": {"wake_result": True, "protocol_frame": False}},
+        ]
+        findings = baseline_missing(rows)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("G9", findings[0])
+        self.assertIn("protocol_frame", findings[0])
+
+    def test_baseline_silent_when_everyone_lacks_it(self):
+        from lstest.scripts.interaction_acceptance import baseline_missing
+
+        rows = [
+            {"case_id": "G1", "features": {"protocol_frame": False}},
+            {"case_id": "G2", "features": {"protocol_frame": False}},
+        ]
+        self.assertEqual(baseline_missing(rows), [])
+
+    def test_marker_capability_skips_absent_category(self):
+        import json
+        from lstest.scripts import markers
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalog = root / "catalog.json"
+            catalog.write_text(json.dumps({
+                "schema": "lstest.marker-catalog.v1",
+                "categories": [{"id": "protocol", "label": "protocol"}],
+                "markers": [{"code": "protoRx", "category": "protocol", "desc": "", "display": []}],
+            }), encoding="utf-8")
+            profile = root / "profile.json"
+            profile.write_text(json.dumps({
+                "schema": "lstest.project-markers.v1",
+                "capabilities": {"markers_absent": ["protocol"]},
+                "event_rules": [],
+            }), encoding="utf-8")
+            extractor = markers.MarkerExtractor.from_paths(catalog, profile)
+            self.assertEqual(extractor.report_missing("ap"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
