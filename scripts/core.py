@@ -398,7 +398,15 @@ class TaskArtifacts:
             result_layout.LAYOUT_V3 if structured_events else result_layout.LAYOUT_V4
         )
         if self.layout == result_layout.LAYOUT_V4:
-            self.run_dir = Path(result_root)
+            root = Path(result_root)
+            root.mkdir(parents=True, exist_ok=True)
+            stamp = now_dt().strftime("%Y%m%d%H%M")
+            candidate = root / stamp
+            suffix = 2
+            while candidate.exists():
+                candidate = root / f"{stamp}-{suffix:02d}"
+                suffix += 1
+            self.run_dir = candidate
             self.run_dir.mkdir(parents=True, exist_ok=True)
         elif run_name:
             self.run_dir = Path(result_root) / run_name

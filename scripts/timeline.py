@@ -631,16 +631,22 @@ class ToolLogValidator:
                 errors.append("缺少标准 v2 产物: " + ", ".join(sorted(missing)))
             errors.extend(self._validate_events_bundle(root))
         elif layout == result_layout.LAYOUT_V4:
-            allowed_v4 = set(result_layout.ROOT_ALLOWED_V4) | {"STOP"}
-            unexpected = actual - allowed_v4
-            if unexpected:
-                errors.append("存在非标准部件: " + ", ".join(sorted(unexpected)))
-            missing = {"tool.log", "results.csv", "cases.csv", "serial_logs"} - actual
-            if missing:
-                errors.append("缺少标准部件: " + ", ".join(sorted(missing)))
-            tool = root / "tool.log"
-            if tool.is_file():
-                errors.extend(self.validate_path(tool))
+            required = {"tool.log", "results.csv", "cases.csv", "serial_logs", "burn_logs", "task.json"}
+            runs = [name for name in actual if re.fullmatch(r"\d{12}(-\d{2})?", name)]
+            extra = actual - set(runs) - {"STOP"}
+            if extra:
+                errors.append("result 根目录存在非运行目录: " + ", ".join(sorted(extra)))
+            if not runs:
+                errors.append("result 下没有时间戳运行目录")
+            for name in sorted(runs):
+                run_root = root / name
+                inner = {item.name for item in run_root.iterdir()}
+                missing = required - inner
+                if missing:
+                    errors.append(f"{name}: 缺少标准部件 " + ", ".join(sorted(missing)))
+                tool = run_root / "tool.log"
+                if tool.is_file():
+                    errors.extend(self.validate_path(tool))
         else:
             expected_files = {"tool.log", "results.csv", "cases.csv", "serial_logs"}
             unexpected = actual - expected_files - {"STOP", "cloud_run"} - set(result_layout.LEGACY_ROOT_FILES)

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -322,6 +323,13 @@ def detect_layout(run_dir: Path | str) -> str:
         return LAYOUT_V3
     if "task.json" in actual or "burn_logs" in actual:
         return LAYOUT_V4
+    for name in actual:
+        if re.fullmatch(r"\d{12}(-\d{2})?", name):
+            child = root / name
+            if child.is_dir():
+                inner = {item.name for item in child.iterdir()}
+                if inner & {"task.json", "tool.log", "serial_logs", "burn_logs"}:
+                    return LAYOUT_V4
     if actual & {"events", "reports", "logs", "artifacts"}:
         return LAYOUT_V3
     if actual & {"machine", "execution_logs"}:
@@ -340,7 +348,15 @@ def audit(run_dir: Path | str) -> dict[str, Any]:
     root = Path(run_dir)
     layout = detect_layout(root)
     actual = sorted(item.name for item in root.iterdir()) if root.is_dir() else []
-    allowed = ROOT_ALLOWED_V4 if layout == LAYOUT_V4 else ROOT_ALLOWED
+    if layout == LAYOUT_V4:
+        allowed = set()
+        for name in actual:
+            if not re.fullmatch(r"\d{12}(-\d{2})?", name):
+                continue
+            allowed.add(name)
+        allowed |= {"STOP"}
+    else:
+        allowed = set(ROOT_ALLOWED)
     violations: list[dict[str, str]] = []
     legacy: list[str] = []
     for name in actual:
