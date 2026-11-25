@@ -1,0 +1,303 @@
+{
+  "schema_version": 1,
+  "profile_id": "海尔海外空调_csk6_hisi",
+  "contract_mode": "strict",
+  "ports": [
+    {"role": "ap", "label": "CSK6 A 口", "baudrate": 115200, "required": true},
+    {"role": "upper", "label": "上位机/HISI", "baudrate": 1500000, "required": false},
+    {"role": "control", "label": "VCOM 控制口", "baudrate": 115200, "required": true},
+    {"role": "burn", "label": "CSK6 烧录口", "baudrate": 115200, "required": false}
+  ],
+  "commands": [],
+  "event_rules": [
+    {
+      "rule_id": "wakeup-json",
+      "code": "wakeup",
+      "event_type": "wake_result",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "Wakeup:\\s*(?P<payload>\\{.*\\})",
+      "presentation_capture": "payload",
+      "display_captures": ["keyword", "intentStr"],
+      "stage": "wake"
+    },
+    {
+      "rule_id": "wake-keyword-line",
+      "code": "intent",
+      "event_type": "wake_result",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "keyword:(?P<keyword>[A-Za-z0-9 ]+)$",
+      "presentation_capture": "keyword",
+      "stage": "wake"
+    },
+    {
+      "rule_id": "wake-mode",
+      "code": "wakeMode",
+      "event_type": "state_change",
+      "sources": {"sources": ["ap"]},
+      "regex": "swicth algo (?P<mode>wakeup|asr) mode",
+      "presentation_capture": "mode",
+      "stage": "wake"
+    },
+    {
+      "rule_id": "algo-mode",
+      "code": "algoMode",
+      "event_type": "state_change",
+      "sources": {"sources": ["ap"]},
+      "regex": "algo-task\\]\\s*MODE=(?P<mode>\\d)",
+      "presentation_capture": "mode",
+      "stage": "wake"
+    },
+    {
+      "rule_id": "player-play-start",
+      "code": "playStart",
+      "event_type": "player_state",
+      "sources": {"sources": ["ap"]},
+      "regex": "algo-task\\]\\s*(?P<value>play start)",
+      "presentation_capture": "value",
+      "stage": "player"
+    },
+    {
+      "rule_id": "player-play-stop",
+      "code": "playStop",
+      "event_type": "player_state",
+      "sources": {"sources": ["ap"]},
+      "regex": "algo-task\\]\\s*(?P<value>play stop)",
+      "presentation_capture": "value",
+      "stage": "player"
+    },
+    {
+      "rule_id": "player-play-id",
+      "code": "playId",
+      "event_type": "player_state",
+      "sources": {"sources": ["ap"]},
+      "regex": "mini-player\\]\\s*play id\\s*:\\s*(?P<id>\\d+)",
+      "presentation_capture": "id",
+      "stage": "player"
+    },
+    {
+      "rule_id": "volume-current",
+      "code": "volume",
+      "event_type": "state_change",
+      "sources": {"sources": ["ap"]},
+      "regex": "^volume\\s*:\\s*(?P<value>\\d+)",
+      "presentation_capture": "value",
+      "stage": "boot"
+    },
+    {
+      "rule_id": "reset-reason",
+      "code": "reset",
+      "event_type": "restart",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "(?P<reason>RESET=0x[0-9A-Fa-f]+/[A-Z]+)",
+      "presentation_capture": "reason",
+      "stage": "recovery"
+    },
+    {
+      "rule_id": "csk-bootloader",
+      "code": "bootloader",
+      "event_type": "restart",
+      "sources": {"sources": ["ap"]},
+      "regex": "(?P<marker>bootloader application)",
+      "presentation_capture": "marker",
+      "stage": "recovery"
+    },
+    {
+      "rule_id": "csk-version",
+      "code": "version",
+      "event_type": "identity",
+      "sources": {"sources": ["ap"]},
+      "regex": "venus ap appliction\\((?P<version>[^)@]+@[^)]+)\\)",
+      "presentation_capture": "version",
+      "stage": "boot"
+    },
+    {
+      "rule_id": "csk-build",
+      "code": "buildInfo",
+      "event_type": "identity",
+      "sources": {"sources": ["ap"]},
+      "regex": "(?:Project Build Info|CSK-SDK Build Info):\\s*(?P<build>[^\\r\\n]+)",
+      "presentation_capture": "build",
+      "stage": "boot"
+    },
+    {
+      "rule_id": "boot-reason",
+      "code": "bootReason",
+      "event_type": "restart",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "Boot Reason:\\s*(?P<reason>[^\\r\\n]+)",
+      "presentation_capture": "reason",
+      "stage": "recovery"
+    },
+    {
+      "rule_id": "ap-boot-ready",
+      "code": "apReady",
+      "event_type": "state_change",
+      "sources": {"sources": ["ap"]},
+      "regex": "(?P<ready>AP Boot Ready !!!)",
+      "presentation_capture": "ready",
+      "stage": "boot"
+    },
+    {
+      "rule_id": "upper-boot-reason",
+      "code": "bootReason",
+      "event_type": "restart",
+      "sources": {"sources": ["upper"]},
+      "regex": "Boot Reason:\\s*(?P<reason>\\d+)",
+      "presentation_capture": "reason",
+      "stage": "recovery"
+    },
+    {
+      "rule_id": "upper-env-lev",
+      "code": "envLev",
+      "event_type": "state_change",
+      "sources": {"sources": ["upper"]},
+      "regex": "env\\s*=\\s*(?P<level>\\d+)",
+      "presentation_capture": "level",
+      "stage": "boot"
+    },
+    {
+      "rule_id": "upper-net-connect",
+      "code": "cloudState",
+      "event_type": "state_change",
+      "sources": {"sources": ["upper"]},
+      "regex": "(?P<state>MSpeech ONLINE|wifi connected[!]*|cloud now reconnect)",
+      "presentation_capture": "state",
+      "stage": "network"
+    },
+    {
+      "rule_id": "ota-start",
+      "code": "otaStart",
+      "event_type": "ota",
+      "sources": {"sources": ["upper", "ap"]},
+      "regex": "(?P<url>https?://[^\\s\"]+\\.bin)",
+      "presentation_capture": "url",
+      "stage": "ota"
+    },
+    {
+      "rule_id": "ota-check-pass",
+      "code": "otaCheck",
+      "event_type": "ota",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "(?P<marker>ota check pass)",
+      "presentation_capture": "marker",
+      "stage": "ota"
+    },
+    {
+      "rule_id": "ota-download-complete",
+      "code": "otaDownloadDone",
+      "event_type": "ota",
+      "sources": {"sources": ["upper", "ap"]},
+      "regex": "(?P<marker>download completa|download complete)",
+      "presentation_capture": "marker",
+      "stage": "ota"
+    },
+    {
+      "rule_id": "ota-upgrade-end",
+      "code": "otaDone",
+      "event_type": "ota",
+      "sources": {"sources": ["upper", "ap"]},
+      "regex": "(?P<marker>APP upgrade end)",
+      "presentation_capture": "marker",
+      "stage": "ota"
+    },
+    {
+      "rule_id": "ota-fail",
+      "code": "otaFail",
+      "event_type": "device_exception",
+      "sources": {"sources": ["upper", "ap"]},
+      "regex": "(?P<reason>ota (?:fail|error)|upgrade fail|verify fail)",
+      "presentation_capture": "reason",
+      "stage": "ota"
+    },
+    {
+      "rule_id": "abnormal-reboot",
+      "code": "unexpectedReboot",
+      "event_type": "device_exception",
+      "sources": {"sources": ["ap"]},
+      "regex": "(?P<marker>unnomally reboot|not normal boot)",
+      "presentation_capture": "marker",
+      "stage": "recovery"
+    },
+    {
+      "rule_id": "fatal",
+      "code": "fatal",
+      "event_type": "device_exception",
+      "sources": {"sources": ["ap", "upper"]},
+      "regex": "(?P<marker>FATAL|ASSERT FAIL|HardFault|panic|watchdog reset|Stack overflow)",
+      "presentation_capture": "marker",
+      "stage": "runtime"
+    },
+    {
+      "rule_id": "control-switch-off",
+      "code": "switchIdx",
+      "event_type": "command_ack",
+      "sources": {"sources": ["control"]},
+      "regex": "switch_idx1_set:\\s*(?P<state>0)",
+      "presentation_capture": "state",
+      "stage": "power"
+    },
+    {
+      "rule_id": "control-switch-on",
+      "code": "switchIdx",
+      "event_type": "command_ack",
+      "sources": {"sources": ["control"]},
+      "regex": "switch_idx1_set:\\s*(?P<state>1)",
+      "presentation_capture": "state",
+      "stage": "power"
+    },
+    {
+      "rule_id": "burn-connect",
+      "code": "connectWithChip",
+      "event_type": "burn",
+      "sources": {"sources": ["burn"]},
+      "regex": "(?P<result>CONNECT WITH CHIP SUCCESS)",
+      "presentation_capture": "result",
+      "stage": "burn"
+    },
+    {
+      "rule_id": "burn-chip-type",
+      "code": "chipType",
+      "event_type": "burn",
+      "sources": {"sources": ["burn"]},
+      "regex": "CHIP TYPE\\s*=\\s*(?P<chip>0x[0-9A-Fa-f]+)",
+      "presentation_capture": "chip",
+      "stage": "burn"
+    },
+    {
+      "rule_id": "burn-md5",
+      "code": "md5Check",
+      "event_type": "burn",
+      "sources": {"sources": ["burn"]},
+      "regex": "MD5 CHECK SUCCESS MD5_VALUE\\s*=\\s*(?P<md5>0x[0-9A-Fa-f]+)",
+      "presentation_capture": "md5",
+      "stage": "burn"
+    },
+    {
+      "rule_id": "burn-flash",
+      "code": "flashDownload",
+      "event_type": "burn",
+      "sources": {"sources": ["burn"]},
+      "regex": "(?P<result>FLASH DOWNLOAD SUCCESS)",
+      "presentation_capture": "result",
+      "stage": "burn"
+    },
+    {
+      "rule_id": "burn-error",
+      "code": "burnError",
+      "event_type": "burn",
+      "sources": {"sources": ["burn"]},
+      "regex": "(?P<reason>(?:CONNECT|FLASH|MD5|SERIAL|CHIP|BAUDRATE)[^\\r\\n]{0,80}(?:FAIL|ERROR|TIMEOUT|MISMATCH))",
+      "presentation_capture": "reason",
+      "stage": "burn"
+    }
+  ],
+  "notes": {
+    "intent": "wakeup 只展示 keyword 与 intentStr；其余 JSON 字段保留在 serial_logs",
+    "code_source": "code 来自 lstest/markers/catalog.json，rule_id 保留项目内唯一性"
+  },
+  "provenance": {
+    "derived_from": "NOAH-412/415 真实日志 + ark-kb 锦衣卫基座",
+    "created_at": "2026-11-24",
+    "regex_validated": true
+  }
+}

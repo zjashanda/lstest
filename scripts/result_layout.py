@@ -46,7 +46,7 @@ LAYOUT_TRANSITIONAL = "v2.5"
 LAYOUT_VERSION = LAYOUT_V4
 TASK_SCHEMA = "lstest.task.v1"
 ROOT_FILES_V4: tuple[str, ...] = ("tool.log", "cases.csv", "results.csv", "task.json")
-ROOT_DIRS_V4: tuple[str, ...] = ("serial_logs",)
+ROOT_DIRS_V4: tuple[str, ...] = ("serial_logs", "burn_logs")
 ROOT_ALLOWED_V4: tuple[str, ...] = ROOT_FILES_V4 + ROOT_DIRS_V4
 V4_MAP: dict[str, str] = {
     "tool_log": "tool.log",
@@ -54,6 +54,7 @@ V4_MAP: dict[str, str] = {
     "results": "results.csv",
     "cases": "cases.csv",
     "serial_dir": "serial_logs",
+    "burn_dir": "burn_logs",
     "stop": "STOP",
     "task": "task.json",
 }
@@ -143,6 +144,8 @@ ENTRIES: dict[str, Entry] = {
                             aliases=()),
     "stage_index": Entry("stage_index", "milestones/stage-index.json", "file", "machine",
                          "阶段索引", aliases=()),
+    "burn_dir": Entry("burn_dir", "burn_logs", "dir", "evidence", "单工具原始日志（烧录等）",
+                      aliases=("burn_log", "burn_logs")),
     "task": Entry("task", "task.json", "file", "machine", "任务执行信息（身份/结论/产物哈希）"),
 }
 
@@ -224,7 +227,8 @@ def path(run_dir: Path | str, key: str, layout: str = LAYOUT_V3) -> Path:
     if layout == LAYOUT_V1:
         mapping = {
             "tool_log": "tool.log", "results": "results.csv", "cases": "cases.csv",
-            "serial_dir": "serial_logs", "stop": "STOP",
+            "serial_dir": "serial_logs",
+    "burn_dir": "burn_logs", "stop": "STOP",
         }
         return run_dir / mapping.get(key, entry.rel)
     raise ValueError(f"未知布局: {layout}")
@@ -316,7 +320,7 @@ def detect_layout(run_dir: Path | str) -> str:
     actual = {item.name for item in root.iterdir()}
     if not actual:
         return LAYOUT_V3
-    if "task.json" in actual:
+    if "task.json" in actual or "burn_logs" in actual:
         return LAYOUT_V4
     if actual & {"events", "reports", "logs", "artifacts"}:
         return LAYOUT_V3
@@ -396,9 +400,10 @@ def ensure_dirs(run_dir: Path | str, layout: str = LAYOUT_V3) -> dict[str, Path]
     created: dict[str, Path] = {}
     if layout == LAYOUT_V4:
         root.mkdir(parents=True, exist_ok=True)
-        target = root / "serial_logs"
-        target.mkdir(parents=True, exist_ok=True)
-        created["serial_dir"] = target
+        for key in ("serial_dir", "burn_dir"):
+            target = root / V4_MAP[key]
+            target.mkdir(parents=True, exist_ok=True)
+            created[key] = target
         return created
     if layout == LAYOUT_V3:
         for name in ROOT_DIRS:
@@ -569,9 +574,10 @@ def write_task_manifest(run_dir: Path | str, *, task_id: str | None = None,
 
 def _v4_artifact_entries(root: Path) -> list[dict[str, Any]]:
     candidates: list[Path] = [root / "tool.log", root / "cases.csv", root / "results.csv"]
-    serial_root = root / "serial_logs"
-    if serial_root.is_dir():
-        candidates.extend(sorted(serial_root.glob("*.log")))
+    for sub in ("serial_logs", "burn_logs"):
+        folder = root / sub
+        if folder.is_dir():
+            candidates.extend(sorted(folder.glob("*.log")))
     entries: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in candidates:

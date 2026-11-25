@@ -74,6 +74,11 @@ def now_iso() -> str:
     return now_text()
 
 
+def now_ms() -> str:
+    stamp = now_dt()
+    return stamp.strftime("%Y-%m-%d %H:%M:%S,") + f"{stamp.microsecond // 1000:03d}"
+
+
 def now_human() -> str:
     return now_text()
 
@@ -435,6 +440,7 @@ class TaskArtifacts:
             EventLogWriter(self.run_dir, self.task_id, fsync=False, layout=self.layout)
             if structured_events else None
         )
+        self.tool_log_style = "ledger" if self.layout == result_layout.LAYOUT_V4 else "legacy"
         self.state_extension = state_extension
         self._event_log_failed = False
         self.structured_summary: dict[str, Any] | None = None
@@ -641,7 +647,73 @@ class TaskArtifacts:
             except (OSError, ValueError) as error:  # 结构化日志不得中断测试执行
                 self._event_log_failed = True
                 self.add_sticky("TOOL_EXCEPTION", f"结构化事件写入失败: {error}", resource="events.jsonl")
+        if getattr(self, "tool_log_style", "ledger") == "ledger":
+            return self._render_ledger_line(event, level, message, known)
         return self._render_tool_line(event, level, message, known)
+
+    _LEDGER_TAGS = {
+        "TASK": "TASK", "TASK_STARTED": "TASK", "TASK_PROGRESS": "TASK",
+        "TASK_FINISHED": "TASK", "TASK_CONFIG": "TASK", "PREFLIGHT": "TASK",
+        "ENV": "ENV", "CASES_FROZEN": "CASES", "LAZY_CASE_DECLARED": "CASES",
+        "CASE_WINDOW_CLOSED": "CASES", "CASE_CHECK": "CASE",
+        "SERIAL_OPEN": "SERIAL", "SERIAL_CLOSE": "SERIAL", "SERIAL_RECONNECT": "SERIAL",
+        "SERIAL_LOSS": "SERIAL", "SERIAL_GAP": "SERIAL", "SERIAL_SKIP": "SERIAL",
+        "SERIAL_OPEN_BLOCKED": "SERIAL", "SERIAL_SESSION_ATTACH": "SERIAL",
+        "SERIAL_SESSION_DETACH_FAILED": "SERIAL", "SERIAL_ROLE_INFERENCE": "SERIAL",
+        "SERIAL_COMMAND_ATTEMPT": "CONTROL", "SERIAL_COMMAND_VALIDATED": "CONTROL",
+        "SERIAL_COMMAND_RETRY": "CONTROL", "SERIAL_COMMAND_BLOCKED": "CONTROL",
+        "SERIAL_COMMAND_ATTEMPT_FAILED": "CONTROL", "SERIAL_COMMAND_RECOVERY_FAILED": "CONTROL",
+        "DEVICE_RESTART_DETECTED": "BOOT", "INIT_READY": "BOOT", "INIT_STABLE": "BOOT",
+        "PROFILE_RECOVERY_RESULT": "BOOT", "PROFILE_RECOVERY_WAIT_INIT": "BOOT",
+        "PROFILE_RECOVERY_STABILIZING": "BOOT", "PROFILE_RECOVERY_CANCELLED": "BOOT",
+        "PROFILE_BLOCKED": "GATE", "CASES_NOT_FROZEN": "GATE", "CASE_NOT_DECLARED": "GATE",
+        "BLOCKED_SERIAL_LEASE": "GATE", "MARKER_SCOPE_REJECTED": "GATE",
+        "RESTART_RECOVERY_MONITOR_STARTED": "BOOT", "RESTART_RECOVERY_MONITOR_STOPPED": "BOOT",
+        "RESTART_RECOVERY_MONITOR_SKIPPED": "BOOT",
+        "WAKE_WORD_VERIFIED": "WAKE", "RECOGNITION_ASSOCIATED": "ASR",
+        "RECOGNITION_ASSOCIATION_ANOMALY": "ANOMALY", "BROADCAST_FAILED": "ANOMALY",
+        "CAPTURE_PROBE": "PLAY", "CAPTURE_PROBE_FAIL": "ANOMALY", "CAPTURE_UNAVAILABLE": "ANOMALY",
+        "STICKY_FATAL": "ANOMALY", "HEALTH_POLICY_TRIGGERED": "ANOMALY",
+        "HEALTH_POLICY": "ANOMALY", "HEALTH_POLICY_SNAPSHOT": "ANOMALY",
+        "HEALTH_SESSION_RECOVERY_REQUESTED": "ANOMALY",
+        "HEALTH_SESSION_RECOVERY_COMPLETED": "ANOMALY",
+        "SESSION_EPOCH_CHANGED": "ANOMALY", "RUNTIME_CLOSE": "TASK",
+        "MONITOR_START": "TASK", "MONITOR_PROGRESS": "TASK", "MONITOR_FINISHED": "TASK",
+    }
+
+    def _render_ledger_line(self, event: str, level: str, message: str, known: Mapping[str, Any]) -> str:
+        """tool.log 主格式：asctime - LEVEL - [TAG] message [k=v ...]"""
+        name = str(event or "EVENT").upper()
+        tag = self._LEDGER_TAGS.get(name, "TASK")
+        port_role = str(known.get("port_role") or "")
+        if port_role:
+            head, _, tail_role = port_role.partition("/")
+            if head:
+                tail_pairs_seed = [f"port={head}"]
+                if tail_role:
+                    tail_pairs_seed.append(f"role={tail_role}")
+            else:
+                tail_pairs_seed = []
+        else:
+            tail_pairs_seed = []
+        tail_pairs = list(tail_pairs_seed)
+        for key in ("round", "case_id", "status", "reason", "attempt", "max_attempts",
+                    "elapsed_ms", "baudrate", "channel", "code"):
+            value = known.get(key)
+            if value in (None, "", [], {}):
+                continue
+            tail_pairs.append(f"{key}={self._text(value)}")
+        details = known.get("details")
+        if isinstance(details, Mapping):
+            for key, value in details.items():
+                if value in (None, "", [], {}):
+                    continue
+                tail_pairs.append(f"{key}={self._text(value)}")
+        body = str(message or name)
+        tail = " ".join(tail_pairs)
+        if tail:
+            body = f"{body} {tail}"
+        return f"{now_ms()} - {level.upper():<5} - [{tag}] {body}\n"
 
     def _render_tool_line(self, event: str, level: str, message: str, known: Mapping[str, Any]) -> str:
         """Render the compact, two-layer human ledger.
@@ -1672,6 +1744,22 @@ class TaskArtifacts:
         bus, letter = split_serial_role(role)
         device_name = safe_segment(device or self.device_name, "device")
         return self.run_dir / self.serial_rel_dir / f"{self.run_stamp}_{device_name}_{safe_port}_{bus}_{letter}.log"
+
+    def burn_log_path(self, tool: str = "burn", seq: int = 1) -> Path:
+        """单工具日志：result/burn_logs/<YYYYmmddHHMM>_<tool>_<seq>.log"""
+        folder = self.run_dir / "burn_logs"
+        folder.mkdir(parents=True, exist_ok=True)
+        stamp = now_dt().strftime("%Y%m%d%H%M")
+        safe_tool = "".join(ch for ch in str(tool or "burn") if ch.isalnum() or ch in "-_") or "burn"
+        return folder / f"{stamp}_{safe_tool}_{int(seq)}.log"
+
+    def blank_line(self) -> None:
+        """轮次之间留空行，便于人工阅读。"""
+        try:
+            self._tool.write("\n")
+            self._tool.flush()
+        except OSError:
+            pass
 
     def write_task_manifest(self, **kwargs: Any) -> Path:
         """写 v4 ``task.json``；v1/v2/v3 布局下退化为 manifest.json。"""

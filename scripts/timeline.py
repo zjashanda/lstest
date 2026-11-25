@@ -18,6 +18,10 @@ from urllib.parse import urlsplit, urlunsplit
 LOG_TAGS = frozenset({
     "SYSTEM", "CASE", "ACTION", "COMMAND", "DEVICE", "ONLINE", "PLAYER", "ERROR", "RESULT", "SUMMARY",
 })
+LEDGER_TAGS = frozenset({
+    "TASK", "ENV", "ASSET", "CASES", "CASE", "SERIAL", "CONTROL", "POWER", "BURN",
+    "BOOT", "MARK", "WAKE", "ASR", "PLAY", "OTA", "RESULT", "ANOMALY", "GATE",
+})
 FACT_TAGS = {
     "WAKE": "DEVICE",
     "OFFLINE_ASR": "DEVICE",
@@ -529,6 +533,8 @@ class ToolLogValidator:
     """Validate the stable format produced by :class:`TimelineLedger`."""
 
     LINE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{3})? \[([A-Z]+)(?: \d+/(?:\d+|-))?\] .+$")
+    LEDGER_LINE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\s+-\s+(?:INFO|WARN|ERROR|DEBUG)\s+-\s+\[([A-Z]+)\] .*$")
+    MARKER_LINE = re.compile(r"^\s{2}\S+\(\S+\): [A-Za-z][A-Za-z0-9_]*: .*$")
 
     def validate_lines(self, lines) -> list[str]:
         errors: list[str] = []
@@ -540,6 +546,14 @@ class ToolLogValidator:
                 continue
             match = self.LINE.match(line)
             if not match:
+                ledger = self.LEDGER_LINE.match(line)
+                if ledger:
+                    tag = ledger.group(1)
+                    if tag not in LOG_TAGS and tag not in LEDGER_TAGS:
+                        errors.append(f"第 {number} 行使用未注册标签 {tag}")
+                    continue
+                if self.MARKER_LINE.match(line):
+                    continue
                 errors.append(f"第 {number} 行时间戳或标签不符合固定格式")
                 continue
             tag = match.group(1)
@@ -616,6 +630,17 @@ class ToolLogValidator:
             if missing:
                 errors.append("缺少标准 v2 产物: " + ", ".join(sorted(missing)))
             errors.extend(self._validate_events_bundle(root))
+        elif layout == result_layout.LAYOUT_V4:
+            allowed_v4 = set(result_layout.ROOT_ALLOWED_V4) | {"STOP"}
+            unexpected = actual - allowed_v4
+            if unexpected:
+                errors.append("存在非标准部件: " + ", ".join(sorted(unexpected)))
+            missing = {"tool.log", "results.csv", "cases.csv", "serial_logs"} - actual
+            if missing:
+                errors.append("缺少标准部件: " + ", ".join(sorted(missing)))
+            tool = root / "tool.log"
+            if tool.is_file():
+                errors.extend(self.validate_path(tool))
         else:
             expected_files = {"tool.log", "results.csv", "cases.csv", "serial_logs"}
             unexpected = actual - expected_files - {"STOP", "cloud_run"} - set(result_layout.LEGACY_ROOT_FILES)
