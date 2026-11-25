@@ -141,6 +141,44 @@ class LedgerFormatTests(unittest.TestCase):
         self.artifacts.emit_action("播报", case_id="c1")
         self.assertIn("播报", self.last_line())
 
+    def test_multiline_message_stays_single_line(self):
+        self.artifacts.emit("TASK_PROGRESS", message="G5 PASS root:/$ \x1b[2K\n\x1b[33mSDK: V0.9.1000, Nov 12")
+        text = self.read_tool()
+        self.assertNotIn("\x1b", text)
+        for line in text.splitlines():
+            self.assertTrue(line.startswith("2026-") or not line.strip(), repr(line))
+
+    def test_task_id_compares_with_task_dir_not_run_dir(self):
+        import json as _json
+        from lstest.scripts.timeline import ToolLogValidator
+
+        with tempfile.TemporaryDirectory() as tmp:
+            task = Path(tmp) / "NOAH-415"
+            run = task / "result" / "202611251628"
+            (run / "serial_logs").mkdir(parents=True)
+            (run / "burn_logs").mkdir()
+            (run / "tool.log").write_text("2026-11-25 16:28:45,810 - INFO  - [TASK] start\n", encoding="utf-8")
+            (run / "cases.csv").write_text("case_order,case_id\n1,G1\n", encoding="utf-8")
+            (run / "results.csv").write_text("case_id,status\nG1,PASS\n", encoding="utf-8")
+            (run / "task.json").write_text(_json.dumps({"task": {"task_id": "NOAH-415"}}), encoding="utf-8")
+            self.assertEqual(ToolLogValidator().validate_run(run), [])
+
+    def test_task_id_mismatch_with_task_dir_is_reported(self):
+        import json as _json
+        from lstest.scripts.timeline import ToolLogValidator
+
+        with tempfile.TemporaryDirectory() as tmp:
+            task = Path(tmp) / "NOAH-262"
+            run = task / "result" / "202611251631"
+            (run / "serial_logs").mkdir(parents=True)
+            (run / "burn_logs").mkdir()
+            (run / "tool.log").write_text("2026-11-25 16:31:46,514 - INFO  - [TASK] start\n", encoding="utf-8")
+            (run / "cases.csv").write_text("case_order,case_id\n1,G1\n", encoding="utf-8")
+            (run / "results.csv").write_text("case_id,status\nG1,PASS\n", encoding="utf-8")
+            (run / "task.json").write_text(_json.dumps({"task": {"task_id": "hisense001_10rounds"}}), encoding="utf-8")
+            errors = ToolLogValidator().validate_run(run)
+            self.assertTrue(any("不一致" in e for e in errors), errors)
+
 
 class MarkerPolicyTests(unittest.TestCase):
     def _extract(self, policy_map):

@@ -711,9 +711,15 @@ class TaskArtifacts:
 
     _SHA256_TOKEN = re.compile(r"\bsha256=[0-9A-Fa-f]{16,}")
 
+    _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+    _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
     @classmethod
     def _scrub(cls, line: str) -> str:
         """流水账不记录校验值一类的机器字段，只留人要看的信息。"""
+        line = cls._ANSI.sub("", line)
+        line = cls._CTRL.sub("", line)
+        line = re.sub(r"[\r\n]+", " ", line)
         line = cls._SHA256_TOKEN.sub("", line)
         line = re.sub(r"\b(reason|note|detail)=\s*(?=\s|$)", "", line)
         line = re.sub(r"[ \t]{2,}", " ", line)

@@ -651,8 +651,16 @@ class ToolLogValidator:
                     task_id = str((payload.get("task") or {}).get("task_id") or "")
                 except (OSError, ValueError):
                     task_id = ""
-                if task_id and task_id != root.name:
-                    errors.append(f"task.json task_id={task_id} 与运行目录名 {root.name} 不一致")
+                parent = root.parent
+                if parent.name == "result":
+                    task_dir_name = parent.parent.name
+                elif root.name == "result":
+                    task_dir_name = parent.name
+                else:
+                    task_dir_name = root.name
+                if task_id and task_id != task_dir_name:
+                    errors.append(
+                        f"task.json task_id={task_id} 与任务目录名 {task_dir_name} 不一致")
         elif layout == result_layout.LAYOUT_V4:
             required = {"tool.log", "results.csv", "cases.csv", "serial_logs", "burn_logs", "task.json"}
             runs = [name for name in actual if re.fullmatch(r"\d{12}(-\d{2})?", name)]
