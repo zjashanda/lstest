@@ -517,7 +517,7 @@ class TaskArtifacts:
         if not match:
             return line
         tag = self._TIMELINE_TAGS.get(match.group(2), "TASK")
-        body = match.group(3).rstrip("\n")
+        body = self._scrub(match.group(3).rstrip("\n"))
         return f"{now_ms()} - INFO  - [{tag}] {body}\n"
 
     def _append_timeline_line(self, line: str) -> None:
