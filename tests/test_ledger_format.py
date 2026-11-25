@@ -123,6 +123,24 @@ class LedgerFormatTests(unittest.TestCase):
         line = self.last_line()
         self.assertRegex(line, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - INFO\s - \[TASK\] 任务开始")
 
+    def test_render_failure_does_not_break_emit(self):
+        self.artifacts._tool_block = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        self.artifacts.emit("CASE_CHECK", message="x", case_id="c1")
+        text = self.read_tool()
+        self.assertIn("tool.log 渲染失败", text)
+        self.assertIn("RuntimeError", text)
+
+    def test_emit_action_tolerates_missing_case_metadata(self):
+        self.artifacts.emit_action("播报", case_id="nope", attempt=1)
+        line = self.last_line()
+        self.assertIn("播报", line)
+        self.assertIn("case=nope", line)
+
+    def test_emit_action_tolerates_bad_audio_value(self):
+        self.artifacts._case_metadata["c1"] = {"audio_path": object()}
+        self.artifacts.emit_action("播报", case_id="c1")
+        self.assertIn("播报", self.last_line())
+
 
 class CapabilityBaselineTests(unittest.TestCase):
     def test_absent_capability_skips_playback_requirement(self):

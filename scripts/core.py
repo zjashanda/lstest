@@ -1093,7 +1093,11 @@ class TaskArtifacts:
             return
         if event == "SERIAL_LINE" and not task_log:
             return
-        block = self._tool_block(event, level, message or event, fields)
+        try:
+            block = self._tool_block(event, level, message or event, fields)
+        except Exception as error:  # noqa: BLE001 - 渲染失败不得中断任务
+            block = (f"{now_ms()} - ERROR - [ANOMALY] tool.log 渲染失败 "
+                     f"event={self._text(event)} error={type(error).__name__}\n")
         if block:
             self._append_timeline_line(block)
         # When a formal runtime has enabled the timeline mirror, the exact
@@ -1823,8 +1827,13 @@ class TaskArtifacts:
         """
         audio = ""
         if case_id:
-            metadata = (getattr(self, "_case_metadata", None) or {}).get(str(case_id), {})
-            audio = safe_basename(metadata.get("audio_path") or "")
+            registry = getattr(self, "_case_metadata", None)
+            metadata = registry.get(str(case_id)) if isinstance(registry, Mapping) else None
+            if isinstance(metadata, Mapping):
+                try:
+                    audio = safe_basename(metadata.get("audio_path") or "")
+                except Exception:  # noqa: BLE001 - 音频名解析失败不影响记录动作
+                    audio = ""
             fields.setdefault("case", case_id)
         parts = [str(action)]
         if case_id and "case" in fields:
