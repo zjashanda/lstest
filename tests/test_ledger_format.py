@@ -13,7 +13,12 @@ class LedgerFormatTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name) / "result"
         self.artifacts = TaskArtifacts(self.root, "NOAH-999", layout=LAYOUT_V4)
-        self.artifacts.freeze_cases([{"case_id": "c1", "scenario": "demo"}])
+        (Path(self._tmp.name) / "result").mkdir(parents=True, exist_ok=True)
+        audio = Path(self._tmp.name) / "wake_tmall.wav"
+        audio.write_bytes(b"RIFFdemo")
+        self.artifacts.freeze_cases([
+            {"case_id": "c1", "scenario": "demo", "audio_file": str(audio)},
+        ])
 
     def tearDown(self):
         try:
@@ -75,13 +80,43 @@ class LedgerFormatTests(unittest.TestCase):
         self.assertNotIn("channel=", line)
 
     def test_emit_action_is_one_ledger_line(self):
-        self.artifacts.emit_action("play_audio", detail="wake_tmall.wav", sha256="abc123", gain=1.0)
+        self.artifacts.emit_action("播报", case_id="c1", attempt=1)
         line = self.last_line()
         self.assertIn("[ACTION]", line)
-        self.assertIn("action=play_audio", line)
+        self.assertIn("播报", line)
         self.assertIn("wake_tmall.wav", line)
-        self.assertIn("gain=1.0", line)
+        self.assertIn("case=c1", line)
+        self.assertIn("attempt=1", line)
         self.assertNotIn("channel=", line)
+        self.assertNotIn("action=", line)
+
+    def test_emit_action_keeps_audio_file_name(self):
+        self.artifacts.emit_action("播报", case_id="c1")
+        line = self.last_line()
+        self.assertIn("wake_tmall.wav", line)
+        self.assertNotIn(str(Path(self._tmp.name)), line)
+
+    def test_emit_paths_records_directories(self):
+        self.artifacts.emit_paths(assets=r"D:\zhsh\workspace\assets",
+                                  tools=r"D:\zhsh\workspace\tools")
+        text = self.read_tool()
+        self.assertIn("[ENV] assets=D:\\zhsh\\workspace\\assets", text)
+        self.assertIn("[ENV] tools=D:\\zhsh\\workspace\\tools", text)
+
+    def test_emit_action_without_case_has_no_audio(self):
+        self.artifacts.emit_action("上电", detail="uut-switch1.on")
+        line = self.last_line()
+        self.assertIn("上电", line)
+        self.assertNotIn("wav", line)
+
+    def test_sha256_is_not_written_to_tool_log(self):
+        digest = "64FE5047E7F2805D2BAB2F35B23AED29FB174688ABD43A08B87BD387123802A9"
+        self.artifacts.emit("CASE_CHECK", message="固件校验", case_id="c1",
+                            status="PASS", reason=f"sha256={digest}")
+        line = self.last_line()
+        self.assertNotIn("sha256", line)
+        self.assertNotIn(digest, line)
+        self.assertIn("status=PASS", line)
 
     def test_timeline_lines_use_ledger_format(self):
         self.artifacts.timeline.system("任务开始: task=NOAH-999")

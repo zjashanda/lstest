@@ -1,7 +1,7 @@
 {
   "schema": "lstest.marker-catalog.v1",
   "version": "1.0.0",
-  "updated_at": "2026-11-24",
+  "updated_at": "2026-11-25",
   "note": "标记位字典：code 与项目无关，跨项目统一；正则由 profiles/<项目>/profile.json 的 event_rules 提供。",
   "line_format": "{indent}{device}({port}): {code}: {value}",
   "categories": [
@@ -15,7 +15,8 @@
     {"id": "env", "label": "环境与配置"},
     {"id": "fault", "label": "异常"},
     {"id": "control", "label": "控制与电源"},
-    {"id": "burn", "label": "烧录"}
+    {"id": "burn", "label": "烧录"},
+    {"id": "protocol", "label": "协议帧"}
   ],
   "markers": [
     {"code": "wakeup", "category": "wake", "desc": "唤醒事件（JSON）", "display": ["keyword", "intentStr"]},
@@ -103,6 +104,9 @@
     {"code": "md5Check", "category": "burn", "desc": "MD5 校验", "display": []},
     {"code": "flashDownload", "category": "burn", "desc": "镜像下载完成", "display": []},
     {"code": "sectorDownload", "category": "burn", "desc": "扇区下载完成", "display": []},
-    {"code": "burnError", "category": "burn", "desc": "烧录错误", "display": []}
+    {"code": "burnError", "category": "burn", "desc": "烧录错误", "display": []},
+
+    {"code": "protoTx", "category": "protocol", "desc": "协议帧发送", "display": []},
+    {"code": "protoRx", "category": "protocol", "desc": "协议帧接收", "display": []}
   ]
 }

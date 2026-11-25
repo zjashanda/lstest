@@ -707,6 +707,16 @@ class TaskArtifacts:
         "MONITOR_START": "TASK", "MONITOR_PROGRESS": "TASK", "MONITOR_FINISHED": "TASK",
     }
 
+    _SHA256_TOKEN = re.compile(r"\bsha256=[0-9A-Fa-f]{16,}")
+
+    @classmethod
+    def _scrub(cls, line: str) -> str:
+        """流水账不记录校验值一类的机器字段，只留人要看的信息。"""
+        line = cls._SHA256_TOKEN.sub("", line)
+        line = re.sub(r"\b(reason|note|detail)=\s*(?=\s|$)", "", line)
+        line = re.sub(r"[ \t]{2,}", " ", line)
+        return re.sub(r"[ |,;]+$", "", line).rstrip()
+
     def _render_ledger_line(self, event: str, level: str, message: str, known: Mapping[str, Any]) -> str:
         """tool.log 主格式：asctime - LEVEL - [TAG] message [k=v ...]"""
         name = str(event or "EVENT").upper()
@@ -734,10 +744,10 @@ class TaskArtifacts:
         head_text = f"[{tag}]"
         if device_prefix:
             head_text = f"[{tag}] {device_prefix}:"
-        line = f"{now_ms()} - {level.upper():<5} - {head_text} {body}"
+        text = f"{head_text} {body}"
         if tail_pairs:
-            line = f"{line} " + " ".join(tail_pairs)
-        return line.rstrip() + "\n"
+            text = f"{text} " + " ".join(tail_pairs)
+        return f"{now_ms()} - {level.upper():<5} - {self._scrub(text)}\n"
 
     def _render_tool_line(self, event: str, level: str, message: str, known: Mapping[str, Any]) -> str:
         """Render the compact, two-layer human ledger.
@@ -1798,16 +1808,46 @@ class TaskArtifacts:
         allocated = len(getattr(self, "_burn_paths", {}) or {})
         return max(existing, allocated) + 1
 
-    def emit_action(self, action: str, *, detail: str = "", level: str = "INFO", **fields: Any) -> None:
-        """记录一条脚本/工具动作（流水账）：谁在什么时间做了什么。"""
-        payload = ["action=" + str(action)]
+    def emit_action(
+        self,
+        action: str,
+        *,
+        detail: str = "",
+        level: str = "INFO",
+        case_id: str | None = None,
+        **fields: Any,
+    ) -> None:
+        """记录一条脚本/工具动作（流水账）：谁在什么时间做了什么。
+
+        传 case_id 时自动带出该用例冻结的音频文件名，保证播报记录能对上文件。
+        """
+        audio = ""
+        if case_id:
+            metadata = (getattr(self, "_case_metadata", None) or {}).get(str(case_id), {})
+            audio = safe_basename(metadata.get("audio_path") or "")
+            fields.setdefault("case", case_id)
+        parts = [str(action)]
+        if case_id and "case" in fields:
+            case_value = fields.pop("case")
+        else:
+            case_value = None
+        if audio and "file" not in fields:
+            parts.append(audio)
+        if case_value:
+            parts.append("case=" + self._text(case_value))
         if detail:
-            payload.append(str(detail))
+            parts.append(str(detail))
         for key, value in fields.items():
             if value in (None, "", [], {}):
                 continue
-            payload.append(f"{key}={self._text(value)}")
-        self.emit("ACTION", level=level, message=" ".join(payload), task_log=True)
+            parts.append(f"{key}={self._text(value)}")
+        self.emit("ACTION", level=level, message=" ".join(parts), task_log=True)
+
+    def emit_paths(self, *, assets: str = "", tools: str = "", repos: str = "") -> None:
+        """开头登记本次运行使用的数据与工具目录，便于事后定位来源。"""
+        for label, path in (("assets", assets), ("tools", tools), ("repos", repos)):
+            if path:
+                self.emit("ENV", message=f"{label}={path}")
 
     def blank_line(self) -> None:
         """轮次之间留空行，便于人工阅读。"""
