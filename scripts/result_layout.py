@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 LAYOUT_V4 = "v4"
+LAYOUT_V4_RUN = "v4-run"
 LAYOUT_V3 = "v3"
 LAYOUT_V2 = "v2"
 LAYOUT_V1 = "v1"
@@ -49,6 +50,22 @@ TASK_SCHEMA = "lstest.task.v1"
 ROOT_FILES_V4: tuple[str, ...] = ("tool.log", "cases.csv", "results.csv", "task.json")
 ROOT_DIRS_V4: tuple[str, ...] = ("serial_logs", "burn_logs")
 ROOT_ALLOWED_V4: tuple[str, ...] = ROOT_FILES_V4 + ROOT_DIRS_V4
+RUN_CORE: frozenset[str] = frozenset({"tool.log", "cases.csv", "results.csv", "serial_logs"})
+V4_RUN_BUNDLE_MAP: dict[str, str] = {
+    "events": "events/events.jsonl",
+    "rounds": "events/rounds.jsonl",
+    "raw_dir": "events/raw",
+    "summary_json": "reports/summary.json",
+    "validation": "reports/validation.json",
+    "preflight": "reports/preflight.json",
+    "status": "reports/status.json",
+    "evidence_summary": "reports/evidence-summary.json",
+    "finalize": "reports/finalize.json",
+    "summary_md": "reports/summary.md",
+    "readme": "reports/README.md",
+    "manifest": "reports/manifest.json",
+    "tool_live": "tool.log",
+}
 V4_MAP: dict[str, str] = {
     "tool_log": "tool.log",
     "tool_live": "tool.log",
@@ -186,8 +203,12 @@ def path(run_dir: Path | str, key: str, layout: str = LAYOUT_V3) -> Path:
     """返回某个逻辑产物在指定布局下的 canonical 路径。"""
     entry = _entry(key)
     run_dir = Path(run_dir)
-    if layout == LAYOUT_V4:
-        return run_dir / V4_MAP.get(key, entry.rel)
+    if layout in (LAYOUT_V4, LAYOUT_V4_RUN):
+        if key in V4_MAP:
+            return run_dir / V4_MAP[key]
+        if key in V4_RUN_BUNDLE_MAP:
+            return run_dir / V4_RUN_BUNDLE_MAP[key]
+        return run_dir / entry.rel
     if layout in (LAYOUT_V3,):
         return run_dir / entry.rel
     if layout == LAYOUT_TRANSITIONAL:
@@ -246,7 +267,11 @@ def resolve(run_dir: Path | str, key: str) -> Path | None:
     """按 canonical → 历史别名顺序找实际存在路径；都不存在返回 None。"""
     run_dir = Path(run_dir)
     entry = _entry(key)
-    for rel in (entry.rel, *entry.aliases):
+    candidates = [entry.rel, *entry.aliases]
+    bundle = V4_RUN_BUNDLE_MAP.get(key)
+    if bundle and bundle not in candidates:
+        candidates.append(bundle)
+    for rel in candidates:
         candidate = run_dir / rel
         if candidate.exists():
             return candidate
@@ -321,6 +346,8 @@ def detect_layout(run_dir: Path | str) -> str:
     actual = {item.name for item in root.iterdir()}
     if not actual:
         return LAYOUT_V3
+    if RUN_CORE <= actual or ("task.json" in actual and "tool.log" in actual):
+        return LAYOUT_V4_RUN
     for name in actual:
         if re.fullmatch(r"\d{12}(-\d{2})?", name):
             child = root / name
@@ -346,7 +373,9 @@ def audit(run_dir: Path | str) -> dict[str, Any]:
     root = Path(run_dir)
     layout = detect_layout(root)
     actual = sorted(item.name for item in root.iterdir()) if root.is_dir() else []
-    if layout == LAYOUT_V4:
+    if layout == LAYOUT_V4_RUN:
+        allowed = set(ROOT_ALLOWED_V4) | {"STOP", "events", "reports"}
+    elif layout == LAYOUT_V4:
         allowed = set()
         for name in actual:
             if not re.fullmatch(r"\d{12}(-\d{2})?", name):
@@ -377,7 +406,11 @@ def audit(run_dir: Path | str) -> dict[str, Any]:
                for key in ENTRIES
                if (found := resolve(root, key)) is not None}
     missing: list[str] = []
-    if layout == LAYOUT_V3:
+    if layout == LAYOUT_V4_RUN:
+        for name in sorted(RUN_CORE):
+            if name not in actual:
+                missing.append(name)
+    elif layout == LAYOUT_V3:
         for key in ("readme", "manifest", "summary_md", "events", "tool_log"):
             if key not in present:
                 missing.append(ENTRIES[key].rel)

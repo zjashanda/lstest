@@ -630,6 +630,18 @@ class ToolLogValidator:
             if missing:
                 errors.append("缺少标准 v2 产物: " + ", ".join(sorted(missing)))
             errors.extend(self._validate_events_bundle(root))
+        elif layout == getattr(result_layout, "LAYOUT_V4_RUN", "v4-run"):
+            required = {"tool.log", "results.csv", "cases.csv", "serial_logs"}
+            optional = {"burn_logs", "task.json", "events", "reports"}
+            unexpected = actual - required - optional - {"STOP"}
+            if unexpected:
+                errors.append("存在非标准产物: " + ", ".join(sorted(unexpected)))
+            missing = required - actual
+            if missing:
+                errors.append("缺少标准产物: " + ", ".join(sorted(missing)))
+            tool = root / "tool.log"
+            if tool.is_file():
+                errors.extend(self.validate_path(tool))
         elif layout == result_layout.LAYOUT_V4:
             required = {"tool.log", "results.csv", "cases.csv", "serial_logs", "burn_logs", "task.json"}
             runs = [name for name in actual if re.fullmatch(r"\d{12}(-\d{2})?", name)]

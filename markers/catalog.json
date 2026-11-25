@@ -5,108 +5,532 @@
   "note": "标记位字典：code 与项目无关，跨项目统一；正则由 profiles/<项目>/profile.json 的 event_rules 提供。",
   "line_format": "{indent}{device}({port}): {code}: {value}",
   "categories": [
-    {"id": "wake", "label": "唤醒与识别"},
-    {"id": "media", "label": "响应播报与媒体"},
-    {"id": "player", "label": "播放器状态"},
-    {"id": "network", "label": "网络与云"},
-    {"id": "device", "label": "设备与硬件"},
-    {"id": "ble", "label": "蓝牙"},
-    {"id": "ota", "label": "OTA"},
-    {"id": "env", "label": "环境与配置"},
-    {"id": "fault", "label": "异常"},
-    {"id": "control", "label": "控制与电源"},
-    {"id": "burn", "label": "烧录"},
-    {"id": "protocol", "label": "协议帧"}
+    {
+      "id": "wake",
+      "label": "唤醒与识别"
+    },
+    {
+      "id": "media",
+      "label": "响应播报与媒体"
+    },
+    {
+      "id": "player",
+      "label": "播放器状态"
+    },
+    {
+      "id": "network",
+      "label": "网络与云"
+    },
+    {
+      "id": "device",
+      "label": "设备与硬件"
+    },
+    {
+      "id": "ble",
+      "label": "蓝牙"
+    },
+    {
+      "id": "ota",
+      "label": "OTA"
+    },
+    {
+      "id": "env",
+      "label": "环境与配置"
+    },
+    {
+      "id": "fault",
+      "label": "异常"
+    },
+    {
+      "id": "control",
+      "label": "控制与电源"
+    },
+    {
+      "id": "burn",
+      "label": "烧录"
+    },
+    {
+      "id": "protocol",
+      "label": "协议帧"
+    }
   ],
   "markers": [
-    {"code": "wakeup", "category": "wake", "desc": "唤醒事件（JSON）", "display": ["keyword", "intentStr"]},
-    {"code": "intent", "category": "wake", "desc": "识别到的意图", "display": []},
-    {"code": "wakeMode", "category": "wake", "desc": "算法模式切换（wakeup/asr）", "display": []},
-    {"code": "algoMode", "category": "wake", "desc": "算法工作模式编号", "display": []},
-    {"code": "asrResult", "category": "wake", "desc": "离线识别结果", "display": []},
-    {"code": "asrOnline", "category": "wake", "desc": "在线识别结果", "display": []},
-    {"code": "asrTimeout", "category": "wake", "desc": "唤醒/识别超时", "display": []},
-    {"code": "vad", "category": "wake", "desc": "VAD 起止", "display": []},
-
-    {"code": "playStart", "category": "media", "desc": "播报开始", "display": []},
-    {"code": "playStop", "category": "media", "desc": "播报结束", "display": []},
-    {"code": "playPause", "category": "media", "desc": "播报暂停", "display": []},
-    {"code": "playResume", "category": "media", "desc": "播报恢复", "display": []},
-    {"code": "playId", "category": "media", "desc": "本地音频/提示音 id", "display": []},
-    {"code": "playUrl", "category": "media", "desc": "云端媒体地址", "display": []},
-    {"code": "playTone", "category": "media", "desc": "本地提示音播放", "display": []},
-    {"code": "playError", "category": "media", "desc": "播报错误", "display": []},
-    {"code": "mediaType", "category": "media", "desc": "媒体类型（tone/url/pcm）", "display": []},
-    {"code": "volume", "category": "media", "desc": "当前音量", "display": []},
-    {"code": "volumeSet", "category": "media", "desc": "音量变更", "display": []},
-    {"code": "audioSha256", "category": "media", "desc": "播放文件校验值", "display": []},
-
-    {"code": "playerState", "category": "player", "desc": "播放器状态", "display": []},
-    {"code": "playerEvt", "category": "player", "desc": "播放器事件", "display": []},
-    {"code": "spkUas", "category": "player", "desc": "扬声器起停", "display": []},
-    {"code": "pa", "category": "player", "desc": "PA 开关", "display": []},
-    {"code": "playerGain", "category": "player", "desc": "播放增益", "display": []},
-
-    {"code": "wifiState", "category": "network", "desc": "WiFi 连接状态", "display": []},
-    {"code": "cloudState", "category": "network", "desc": "云端连接状态", "display": []},
-    {"code": "mqtt", "category": "network", "desc": "MQTT 状态", "display": []},
-    {"code": "netLogLev", "category": "network", "desc": "网络日志级别", "display": []},
-    {"code": "netUrl", "category": "network", "desc": "云端下发地址", "display": []},
-    {"code": "dns", "category": "network", "desc": "DNS 解析", "display": []},
-    {"code": "httpCode", "category": "network", "desc": "HTTP 响应码", "display": []},
-    {"code": "netError", "category": "network", "desc": "网络错误", "display": []},
-
-    {"code": "chipType", "category": "device", "desc": "芯片型号", "display": []},
-    {"code": "version", "category": "device", "desc": "固件版本", "display": []},
-    {"code": "buildInfo", "category": "device", "desc": "构建信息", "display": []},
-    {"code": "bootReason", "category": "device", "desc": "启动原因", "display": []},
-    {"code": "bootloader", "category": "device", "desc": "进入 bootloader", "display": []},
-    {"code": "apReady", "category": "device", "desc": "应用启动完成", "display": []},
-    {"code": "sn", "category": "device", "desc": "设备/芯片序列号", "display": []},
-    {"code": "heap", "category": "device", "desc": "内存水位", "display": []},
-    {"code": "reset", "category": "device", "desc": "复位原因", "display": []},
-    {"code": "flashInfo", "category": "device", "desc": "Flash 信息", "display": []},
-
-    {"code": "bleState", "category": "ble", "desc": "蓝牙状态", "display": []},
-    {"code": "bleConn", "category": "ble", "desc": "蓝牙连接事件", "display": []},
-    {"code": "bleAddr", "category": "ble", "desc": "蓝牙地址", "display": []},
-    {"code": "bleMtu", "category": "ble", "desc": "蓝牙 MTU", "display": []},
-
-    {"code": "otaCheck", "category": "ota", "desc": "OTA 校验通过", "display": []},
-    {"code": "otaStart", "category": "ota", "desc": "OTA 开始/下载地址", "display": []},
-    {"code": "otaDownload", "category": "ota", "desc": "OTA 下载进度", "display": []},
-    {"code": "otaDownloadDone", "category": "ota", "desc": "OTA 下载完成", "display": []},
-    {"code": "otaVerify", "category": "ota", "desc": "OTA 校验结果", "display": []},
-    {"code": "otaSwitch", "category": "ota", "desc": "OTA 槽位切换", "display": []},
-    {"code": "otaDone", "category": "ota", "desc": "OTA 升级完成", "display": []},
-    {"code": "otaFail", "category": "ota", "desc": "OTA 失败", "display": []},
-
-    {"code": "envLev", "category": "env", "desc": "环境等级", "display": []},
-    {"code": "envSetDone", "category": "env", "desc": "环境设置完成", "display": []},
-    {"code": "logLev", "category": "env", "desc": "日志级别", "display": []},
-    {"code": "logLevSetDone", "category": "env", "desc": "日志级别设置完成", "display": []},
-    {"code": "algoLang", "category": "env", "desc": "语种切换", "display": []},
-
-    {"code": "fatal", "category": "fault", "desc": "致命异常", "display": []},
-    {"code": "watchdog", "category": "fault", "desc": "看门狗复位", "display": []},
-    {"code": "unexpectedReboot", "category": "fault", "desc": "非预期重启", "display": []},
-    {"code": "memError", "category": "fault", "desc": "内存错误", "display": []},
-
-    {"code": "switchIdx", "category": "control", "desc": "上下电回执", "display": []},
-    {"code": "bootPin", "category": "control", "desc": "boot 引脚回执", "display": []},
-    {"code": "cmdEcho", "category": "control", "desc": "命令回显", "display": []},
-    {"code": "prompt", "category": "control", "desc": "shell 提示符", "display": []},
-    {"code": "cmdNotFound", "category": "control", "desc": "命令不存在", "display": []},
-
-    {"code": "connectWithChip", "category": "burn", "desc": "烧录连接芯片", "display": []},
-    {"code": "baudrateChange", "category": "burn", "desc": "烧录波特率切换", "display": []},
-    {"code": "writeSize", "category": "burn", "desc": "写入大小", "display": []},
-    {"code": "md5Check", "category": "burn", "desc": "MD5 校验", "display": []},
-    {"code": "flashDownload", "category": "burn", "desc": "镜像下载完成", "display": []},
-    {"code": "sectorDownload", "category": "burn", "desc": "扇区下载完成", "display": []},
-    {"code": "burnError", "category": "burn", "desc": "烧录错误", "display": []},
-
-    {"code": "protoTx", "category": "protocol", "desc": "协议帧发送", "display": []},
-    {"code": "protoRx", "category": "protocol", "desc": "协议帧接收", "display": []}
+    {
+      "code": "wakeup",
+      "category": "wake",
+      "desc": "唤醒事件（JSON）",
+      "display": [
+        "keyword",
+        "intentStr"
+      ]
+    },
+    {
+      "code": "intent",
+      "category": "wake",
+      "desc": "识别到的意图",
+      "display": []
+    },
+    {
+      "code": "wakeMode",
+      "category": "wake",
+      "desc": "算法模式切换（wakeup/asr）",
+      "display": []
+    },
+    {
+      "code": "algoMode",
+      "category": "wake",
+      "desc": "算法工作模式编号",
+      "display": []
+    },
+    {
+      "code": "asrResult",
+      "category": "wake",
+      "desc": "离线识别结果",
+      "display": []
+    },
+    {
+      "code": "asrOnline",
+      "category": "wake",
+      "desc": "在线识别结果",
+      "display": []
+    },
+    {
+      "code": "asrTimeout",
+      "category": "wake",
+      "desc": "唤醒/识别超时",
+      "display": []
+    },
+    {
+      "code": "vad",
+      "category": "wake",
+      "desc": "VAD 起止",
+      "display": []
+    },
+    {
+      "code": "playStart",
+      "category": "media",
+      "desc": "播报开始",
+      "display": []
+    },
+    {
+      "code": "playStop",
+      "category": "media",
+      "desc": "播报结束",
+      "display": []
+    },
+    {
+      "code": "playPause",
+      "category": "media",
+      "desc": "播报暂停",
+      "display": []
+    },
+    {
+      "code": "playResume",
+      "category": "media",
+      "desc": "播报恢复",
+      "display": []
+    },
+    {
+      "code": "playId",
+      "category": "media",
+      "desc": "本地音频/提示音 id",
+      "display": []
+    },
+    {
+      "code": "playUrl",
+      "category": "media",
+      "desc": "云端媒体地址",
+      "display": []
+    },
+    {
+      "code": "playTone",
+      "category": "media",
+      "desc": "本地提示音播放",
+      "display": []
+    },
+    {
+      "code": "playError",
+      "category": "media",
+      "desc": "播报错误",
+      "display": []
+    },
+    {
+      "code": "mediaType",
+      "category": "media",
+      "desc": "媒体类型（tone/url/pcm）",
+      "display": []
+    },
+    {
+      "code": "volume",
+      "category": "media",
+      "desc": "当前音量",
+      "display": []
+    },
+    {
+      "code": "volumeSet",
+      "category": "media",
+      "desc": "音量变更",
+      "display": []
+    },
+    {
+      "code": "audioSha256",
+      "category": "media",
+      "desc": "播放文件校验值",
+      "display": []
+    },
+    {
+      "code": "playerState",
+      "category": "player",
+      "desc": "播放器状态",
+      "display": []
+    },
+    {
+      "code": "playerEvt",
+      "category": "player",
+      "desc": "播放器事件",
+      "display": []
+    },
+    {
+      "code": "spkUas",
+      "category": "player",
+      "desc": "扬声器起停",
+      "display": []
+    },
+    {
+      "code": "pa",
+      "category": "player",
+      "desc": "PA 开关",
+      "display": []
+    },
+    {
+      "code": "playerGain",
+      "category": "player",
+      "desc": "播放增益",
+      "display": []
+    },
+    {
+      "code": "wifiState",
+      "category": "network",
+      "desc": "WiFi 连接状态",
+      "display": []
+    },
+    {
+      "code": "cloudState",
+      "category": "network",
+      "desc": "云端连接状态",
+      "display": []
+    },
+    {
+      "code": "mqtt",
+      "category": "network",
+      "desc": "MQTT 状态",
+      "display": []
+    },
+    {
+      "code": "netLogLev",
+      "category": "network",
+      "desc": "网络日志级别",
+      "display": []
+    },
+    {
+      "code": "netUrl",
+      "category": "network",
+      "desc": "云端下发地址",
+      "display": []
+    },
+    {
+      "code": "dns",
+      "category": "network",
+      "desc": "DNS 解析",
+      "display": []
+    },
+    {
+      "code": "httpCode",
+      "category": "network",
+      "desc": "HTTP 响应码",
+      "display": []
+    },
+    {
+      "code": "netError",
+      "category": "network",
+      "desc": "网络错误",
+      "display": []
+    },
+    {
+      "code": "chipType",
+      "category": "device",
+      "desc": "芯片型号",
+      "display": []
+    },
+    {
+      "code": "version",
+      "category": "device",
+      "desc": "固件版本",
+      "display": []
+    },
+    {
+      "code": "buildInfo",
+      "category": "device",
+      "desc": "构建信息",
+      "display": []
+    },
+    {
+      "code": "bootReason",
+      "category": "device",
+      "desc": "启动原因",
+      "display": []
+    },
+    {
+      "code": "bootloader",
+      "category": "device",
+      "desc": "进入 bootloader",
+      "display": []
+    },
+    {
+      "code": "apReady",
+      "category": "device",
+      "desc": "应用启动完成",
+      "display": []
+    },
+    {
+      "code": "sn",
+      "category": "device",
+      "desc": "设备/芯片序列号",
+      "display": []
+    },
+    {
+      "code": "heap",
+      "category": "device",
+      "desc": "内存水位",
+      "display": []
+    },
+    {
+      "code": "reset",
+      "category": "device",
+      "desc": "复位原因",
+      "display": []
+    },
+    {
+      "code": "flashInfo",
+      "category": "device",
+      "desc": "Flash 信息",
+      "display": []
+    },
+    {
+      "code": "bleState",
+      "category": "ble",
+      "desc": "蓝牙状态",
+      "display": []
+    },
+    {
+      "code": "bleConn",
+      "category": "ble",
+      "desc": "蓝牙连接事件",
+      "display": []
+    },
+    {
+      "code": "bleAddr",
+      "category": "ble",
+      "desc": "蓝牙地址",
+      "display": []
+    },
+    {
+      "code": "bleMtu",
+      "category": "ble",
+      "desc": "蓝牙 MTU",
+      "display": []
+    },
+    {
+      "code": "otaCheck",
+      "category": "ota",
+      "desc": "OTA 校验通过",
+      "display": []
+    },
+    {
+      "code": "otaStart",
+      "category": "ota",
+      "desc": "OTA 开始/下载地址",
+      "display": []
+    },
+    {
+      "code": "otaDownload",
+      "category": "ota",
+      "desc": "OTA 下载进度",
+      "display": []
+    },
+    {
+      "code": "otaDownloadDone",
+      "category": "ota",
+      "desc": "OTA 下载完成",
+      "display": []
+    },
+    {
+      "code": "otaVerify",
+      "category": "ota",
+      "desc": "OTA 校验结果",
+      "display": []
+    },
+    {
+      "code": "otaSwitch",
+      "category": "ota",
+      "desc": "OTA 槽位切换",
+      "display": []
+    },
+    {
+      "code": "otaDone",
+      "category": "ota",
+      "desc": "OTA 升级完成",
+      "display": []
+    },
+    {
+      "code": "otaFail",
+      "category": "ota",
+      "desc": "OTA 失败",
+      "display": []
+    },
+    {
+      "code": "envLev",
+      "category": "env",
+      "desc": "环境等级",
+      "display": []
+    },
+    {
+      "code": "envSetDone",
+      "category": "env",
+      "desc": "环境设置完成",
+      "display": []
+    },
+    {
+      "code": "logLev",
+      "category": "env",
+      "desc": "日志级别",
+      "display": []
+    },
+    {
+      "code": "logLevSetDone",
+      "category": "env",
+      "desc": "日志级别设置完成",
+      "display": []
+    },
+    {
+      "code": "algoLang",
+      "category": "env",
+      "desc": "语种切换",
+      "display": []
+    },
+    {
+      "code": "fatal",
+      "category": "fault",
+      "desc": "致命异常",
+      "display": []
+    },
+    {
+      "code": "watchdog",
+      "category": "fault",
+      "desc": "看门狗复位",
+      "display": []
+    },
+    {
+      "code": "unexpectedReboot",
+      "category": "fault",
+      "desc": "非预期重启",
+      "display": []
+    },
+    {
+      "code": "memError",
+      "category": "fault",
+      "desc": "内存错误",
+      "display": []
+    },
+    {
+      "code": "switchIdx",
+      "category": "control",
+      "desc": "上下电回执",
+      "display": []
+    },
+    {
+      "code": "bootPin",
+      "category": "control",
+      "desc": "boot 引脚回执",
+      "display": []
+    },
+    {
+      "code": "cmdEcho",
+      "category": "control",
+      "desc": "命令回显",
+      "display": []
+    },
+    {
+      "code": "prompt",
+      "category": "control",
+      "desc": "shell 提示符",
+      "display": []
+    },
+    {
+      "code": "cmdNotFound",
+      "category": "control",
+      "desc": "命令不存在",
+      "display": []
+    },
+    {
+      "code": "connectWithChip",
+      "category": "burn",
+      "desc": "烧录连接芯片",
+      "display": []
+    },
+    {
+      "code": "baudrateChange",
+      "category": "burn",
+      "desc": "烧录波特率切换",
+      "display": []
+    },
+    {
+      "code": "writeSize",
+      "category": "burn",
+      "desc": "写入大小",
+      "display": []
+    },
+    {
+      "code": "md5Check",
+      "category": "burn",
+      "desc": "MD5 校验",
+      "display": []
+    },
+    {
+      "code": "flashDownload",
+      "category": "burn",
+      "desc": "镜像下载完成",
+      "display": []
+    },
+    {
+      "code": "sectorDownload",
+      "category": "burn",
+      "desc": "扇区下载完成",
+      "display": []
+    },
+    {
+      "code": "burnError",
+      "category": "burn",
+      "desc": "烧录错误",
+      "display": []
+    },
+    {
+      "code": "protoTx",
+      "category": "protocol",
+      "desc": "协议帧发送",
+      "display": []
+    },
+    {
+      "code": "protoRx",
+      "category": "protocol",
+      "desc": "协议帧接收",
+      "display": []
+    },
+    {
+      "code": "volumeLevel",
+      "category": "media",
+      "desc": "音量档位配置(0-4)",
+      "display": []
+    }
   ]
 }

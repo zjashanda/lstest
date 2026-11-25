@@ -142,6 +142,45 @@ class LedgerFormatTests(unittest.TestCase):
         self.assertIn("播报", self.last_line())
 
 
+class RunDirLayoutTests(unittest.TestCase):
+    def _make_run(self, root: Path, stamp: str = "202611251447") -> Path:
+        run = root / stamp
+        (run / "serial_logs").mkdir(parents=True)
+        (run / "burn_logs").mkdir()
+        (run / "tool.log").write_text("2026-11-25 14:47:00,123 - INFO  - [TASK] start\n", encoding="utf-8")
+        (run / "cases.csv").write_text("case_order,case_id\n1,G1\n", encoding="utf-8")
+        (run / "results.csv").write_text("case_id,status\nG1,PASS\n", encoding="utf-8")
+        (run / "task.json").write_text("{}", encoding="utf-8")
+        return run
+
+    def test_run_dir_is_detected_as_v4_run(self):
+        from lstest.scripts import result_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "result"
+            run = self._make_run(root)
+            self.assertEqual(result_layout.detect_layout(run), result_layout.LAYOUT_V4_RUN)
+            self.assertEqual(result_layout.detect_layout(root), result_layout.LAYOUT_V4)
+
+    def test_run_dir_audit_has_no_violations(self):
+        from lstest.scripts import result_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "result"
+            run = self._make_run(root)
+            report = result_layout.audit(run)
+            self.assertTrue(report["root_ok"], report["violations"])
+            self.assertEqual(report["violations"], [])
+
+    def test_run_dir_validate_is_clean(self):
+        from lstest.scripts.timeline import ToolLogValidator
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "result"
+            run = self._make_run(root)
+            self.assertEqual(ToolLogValidator().validate_run(run), [])
+
+
 class CapabilityBaselineTests(unittest.TestCase):
     def test_absent_capability_skips_playback_requirement(self):
         from lstest.scripts.interaction_acceptance import evaluate_round

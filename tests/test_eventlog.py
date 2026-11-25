@@ -508,9 +508,12 @@ class TaskArtifactsIntegrationTests(unittest.TestCase):
             self.assertTrue(result_layout.resolve_required(run_dir, "events").is_file())
             self.assertTrue(result_layout.resolve_required(run_dir, "tool_log").is_file())
             self.assertTrue(result_layout.resolve_required(run_dir, "tool_live").is_file())
-            self.assertTrue((run_dir / "summary.md").is_file())
-            self.assertTrue((run_dir / "README.md").is_file())
-            self.assertTrue((run_dir / "manifest.json").is_file())
+            self.assertTrue(result_layout.resolve_required(run_dir, "summary_md").is_file())
+            # v4 运行目录只允许六项 + 可选事件包，不再产出根级 README/manifest
+            self.assertFalse((run_dir / "readme.md").exists() and (run_dir / "README.md").exists())
+            names = {item.name for item in run_dir.iterdir()}
+            self.assertTrue({"serial_logs", "burn_logs", "tool.log", "cases.csv",
+                             "results.csv"}.issubset(names), names)
             summary = json.loads(summary_json(run_dir).read_text(encoding="utf-8"))
             self.assertEqual(summary["rates"]["round_success_rate"], 100.0)
             self.assertEqual(summary["final_status"], "PASS")

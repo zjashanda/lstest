@@ -350,15 +350,16 @@ class TaskSupervisor:
 class TaskArtifacts:
     """The four-artifact result ledger used by every new lstest task.
 
-    ``logs/serial/`` (v3) or ``serial_logs/`` (v1) is the continuous
-    device-side fact source.  ``events/tool.log`` (v3) or ``tool.log`` (v1) is
-    the single human-readable execution ledger.  ``reports/results.csv`` (v3)
-    or ``results.csv`` (v1) contains one final row per logical case, and
-    ``reports/cases.csv`` (v3) or ``cases.csv`` (v1) freezes the input order
-    before any device action.
+    每次运行生成 ``result/<YYYYmmddHHMM>/``（同分钟自动 ``-02`` 后缀），
+    目录内固定六项：``serial_logs/``、``burn_logs/``、``tool.log``、
+    ``cases.csv``、``results.csv``、``task.json``。
 
-    ``layout=None`` 时：结构化事件任务用 v3，旧四产物任务保持 v1，
-    这样历史适配器与测试不会因为目录整理而改变语义。
+    ``tool.log`` 是流水账（脚本动作 + 设备标记 + 判定）。``serial_logs/`` 是
+    设备侧原始事实来源，``burn_logs/`` 是烧录工具原始输出。
+
+    2.6.0 起 ``layout`` 一律默认 v4；``structured_events=True`` 只额外启用
+    事件包写入（``events/``、``reports/`` 两个可选子目录），不再改变目录布局。
+    旧 v1/v2/v3 运行仍可被校验与迁移。
     """
 
     TOOL_FIELDS = (
@@ -394,9 +395,8 @@ class TaskArtifacts:
         state_extension: Any | None = None,
         layout: str | None = None,
     ):
-        self.layout = layout or (
-            result_layout.LAYOUT_V3 if structured_events else result_layout.LAYOUT_V4
-        )
+        # 2.6.0 起统一 v4：structured_events 只保留事件包写入能力，不再改变目录布局
+        self.layout = layout or result_layout.LAYOUT_V4
         if self.layout == result_layout.LAYOUT_V4:
             root = Path(result_root)
             root.mkdir(parents=True, exist_ok=True)
@@ -430,7 +430,7 @@ class TaskArtifacts:
                 self.run_dir, "tool_live" if structured_events else "tool_log", self.layout
             )
         else:
-            self.tool_log_path = self.run_dir / ("tool.live.log" if structured_events else "tool.log")
+            self.tool_log_path = self.run_dir / "tool.log"
         self.tool_log_path.parent.mkdir(parents=True, exist_ok=True)
         self.serial_rel_dir = result_layout.path(
             self.run_dir, "serial_dir", self.layout

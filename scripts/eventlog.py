@@ -2546,7 +2546,7 @@ def write_bundle(records: Sequence[EventRecord], out_dir: Path, *,
     records = list(records)
     if layout is None:
         layout = result_layout.detect_layout(out_dir)
-        if layout == result_layout.LAYOUT_V1:
+        if layout in (result_layout.LAYOUT_V1, result_layout.LAYOUT_V4):
             layout = result_layout.LAYOUT_V3
     events = Path(events_path) if events_path else result_layout.path(out_dir, "events", layout)
     context = dict(meta or {})
@@ -2559,10 +2559,19 @@ def write_bundle(records: Sequence[EventRecord], out_dir: Path, *,
     summary_target.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    (out_dir / "summary.md").write_text(render_summary_md(summary), encoding="utf-8")
-    tool_target = result_layout.path(out_dir, "tool_log", layout)
-    tool_target.parent.mkdir(parents=True, exist_ok=True)
-    tool_target.write_text(render_tool_log(summary, records), encoding="utf-8")
+    summary_md = result_layout.path(out_dir, "summary_md", layout)
+    summary_md.parent.mkdir(parents=True, exist_ok=True)
+    summary_md.write_text(render_summary_md(summary), encoding="utf-8")
+    if layout in (result_layout.LAYOUT_V4, result_layout.LAYOUT_V4_RUN):
+        # v4 的 tool.log 是运行流水账，由 core 渲染；事件派生的审计副本另存，禁止覆盖
+        tool_target = result_layout.path(out_dir, "summary_json", layout).parent / "events-tool.log"
+        tool_target.parent.mkdir(parents=True, exist_ok=True)
+        if not tool_target.exists():
+            tool_target.write_text(render_tool_log(summary, records), encoding="utf-8")
+    else:
+        tool_target = result_layout.path(out_dir, "tool_log", layout)
+        tool_target.parent.mkdir(parents=True, exist_ok=True)
+        tool_target.write_text(render_tool_log(summary, records), encoding="utf-8")
     if layout == result_layout.LAYOUT_V3:
         result_layout.write_readme(out_dir, task_id=summary.get("task_id"))
         result_layout.write_manifest(out_dir, task_id=summary.get("task_id"))
@@ -2586,19 +2595,20 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False,
             "缺少 events.jsonl（v3: events/events.jsonl；v2: 根目录 events.jsonl）")
         return findings
     events_path = events_found
-    if layout != result_layout.LAYOUT_V3:
+    ok_layouts = (result_layout.LAYOUT_V3, result_layout.LAYOUT_V4_RUN)
+    if layout not in ok_layouts:
         add("LAYOUT_LEGACY", "WARN",
-            f"旧结果布局 {layout}：可读，建议用 `lstest.py result migrate` 迁移到 v3")
+            f"旧结果布局 {layout}：可读，建议用 `lstest.py result migrate` 迁移到当前布局")
     else:
         report = result_layout.audit(run_dir)
         for item in report["violations"]:
-            # v3 目录内根目录仍散落旧 JSON/日志即违反交付契约；旧布局目录只告警。
             add("LAYOUT_VIOLATION", "ERROR",
                 f"根目录存在 {item['reason']} 项 {item['name']}；建议：{item['suggestion']}")
         for rel in report["missing"]:
-            add("LAYOUT_MISSING", "ERROR", f"v3 布局缺少 {rel}")
-        for item in result_layout.verify_manifest(run_dir):
-            add(item["code"], item["level"], item["message"])
+            add("LAYOUT_MISSING", "ERROR", f"布局缺少 {rel}")
+        if result_layout.resolve(run_dir, "manifest") is not None:
+            for item in result_layout.verify_manifest(run_dir):
+                add(item["code"], item["level"], item["message"])
     try:
         records = read_events(events_path)
     except LegacyFormatError as error:
@@ -2651,7 +2661,8 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False,
     tool_log_path = result_layout.resolve(run_dir, "tool_log")
     if tool_log_path is None:
         add("MISSING_OUTPUT", "ERROR", "缺少 tool.log（v3: events/tool.log）")
-    if not (run_dir / "summary.md").is_file():
+    summary_md_path = result_layout.resolve(run_dir, "summary_md")
+    if summary_md_path is None:
         add("MISSING_OUTPUT", "ERROR", "缺少 summary.md")
 
     regenerated = summarize(records, meta={
@@ -2681,7 +2692,8 @@ def verify_bundle(run_dir: Path, *, check_files: bool = False,
     if stored.get("task_id") != expected.get("task_id"):
         add("SUMMARY_DRIFT", "WARN", "summary.json task_id 与事件重算不一致")
 
-    if tool_log_path is not None and tool_log_path.is_file():
+    ledger_owned = layout in (result_layout.LAYOUT_V4, result_layout.LAYOUT_V4_RUN)
+    if tool_log_path is not None and tool_log_path.is_file() and not ledger_owned:
         tool_log = tool_log_path.read_text(encoding="utf-8")
         display_format = ("unified" if str((stored.get("meta") or {}).get("display_format", "")).startswith("unified")
                           else "legacy")
