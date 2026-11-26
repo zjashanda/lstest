@@ -90,6 +90,9 @@ def check_markers_in_serial(run_dir: Path) -> list[str]:
         if not match:
             continue
         value = (match.group(3) or "").strip()
+        # 汇总行（flush_markers 产出）不是原始值，跳过逐字比对
+        if value.startswith("共 ") or "条；" in value:
+            continue
         # display 字段渲染成 k=v, k=v 时逐个值比对
         candidates = [part.split("=", 1)[-1].strip() for part in value.split(",")] or [value]
         if not any(cand and cand in haystack for cand in candidates):

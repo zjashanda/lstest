@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -106,6 +107,7 @@ class PlaybackBackend:
             completed = subprocess.run(
                 self._player_command("probe"), capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=30, check=False,
+                stdin=subprocess.DEVNULL, creationflags=_no_window_flags(),
             )
         except subprocess.TimeoutExpired as error:
             duration_s = round(time.monotonic() - started, 3)
@@ -181,6 +183,7 @@ class PlaybackBackend:
             completed = subprocess.run(
                 self._player_command("play", audio=audio), capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=timeout_s, check=False,
+                stdin=subprocess.DEVNULL, creationflags=_no_window_flags(),
             )
         except subprocess.TimeoutExpired as error:
             duration_s = round(time.monotonic() - started, 3)
@@ -323,3 +326,8 @@ class PlayerEventNormalizer:
             "player_state": classification,
             "tool_status": "OBSERVED" if classification else "WARN",
         }
+
+def _no_window_flags() -> int:
+    """Windows 下禁止子进程创建控制台窗口。"""
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0
+

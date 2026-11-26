@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,11 @@ except ImportError:
     from profile import DeviceProfile, ProfileError
     from smoke import run_smoke
 
+
+
+def _no_window_flags() -> int:
+    """Windows 下禁止子进程创建控制台窗口。"""
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0
 
 def parse_ports(values: list[str], baudrate: int) -> list[dict[str, object]]:
     result = []
@@ -359,7 +365,8 @@ def run_audio_tool(args: argparse.Namespace) -> int:
             command.append("--skip-probe")
     else:  # pragma: no cover - argparse limits this value
         raise ValueError(f"unsupported audio command: {args.audio_command}")
-    completed = subprocess.run(command, check=False)
+    completed = subprocess.run(command, check=False, stdin=subprocess.DEVNULL,
+                               creationflags=_no_window_flags())
     return completed.returncode
 
 

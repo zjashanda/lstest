@@ -57,6 +57,39 @@ def _windows_for_pid(pid: int) -> list[dict[str, object]]:
     return found
 
 
+def _child_pids(parent_pid: int) -> list[int]:
+    """枚举子进程 pid（Windows 用 WMI，其它平台返回空）。"""
+    if os.name != "nt":
+        return []
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             f"Get-CimInstance Win32_Process -Filter \"ParentProcessId={parent_pid}\" | "
+             f"Select-Object -ExpandProperty ProcessId"],
+            capture_output=True, text=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+        )
+        return [int(line) for line in (out.stdout or "").split() if line.strip().isdigit()]
+    except Exception:  # noqa: BLE001 - 探测失败不影响主流程
+        return []
+
+
+def _windows_for_tree(root_pid: int, max_depth: int = 4) -> list[dict[str, object]]:
+    """整棵进程树里出现过的可见窗口（子进程再 spawn 的孙进程也检查）。"""
+    seen: list[dict[str, object]] = []
+    frontier = [root_pid]
+    for _ in range(max_depth):
+        next_frontier: list[int] = []
+        for pid in frontier:
+            for item in _windows_for_pid(pid):
+                seen.append({"pid": pid, **item})
+            next_frontier.extend(_child_pids(pid))
+        if not next_frontier:
+            break
+        frontier = next_frontier
+    return seen
+
+
 def _append_evidence(log_dir: Path, record: dict[str, object]) -> None:
     path = log_dir / EVIDENCE_NAME
     runs: list[dict[str, object]] = []
@@ -125,7 +158,7 @@ def launch(
     seen: list[dict[str, object]] = []
     while proc.poll() is None:
         if verify_window:
-            windows = _windows_for_pid(proc.pid)
+            windows = _windows_for_tree(proc.pid)
             if windows:
                 max_windows = max(max_windows, len(windows))
                 seen = windows
@@ -139,6 +172,7 @@ def launch(
         "exit_code": rc,
         "duration_s": round(time.time() - started, 3),
         "window_count": max_windows,
+        "windows_checked_tree": bool(verify_window),
         "visible_windows": seen,
         "hidden_verified": max_windows == 0,
         "non_interactive": True,

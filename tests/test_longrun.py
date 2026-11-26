@@ -133,6 +133,25 @@ class LaunchHiddenTests(unittest.TestCase):
             self.assertTrue(record.get("timeout_hit"))
             self.assertLess(record["duration_s"], 10)
 
+    def test_process_tree_window_check_runs(self):
+        from lstest.scripts import launch_hidden
+
+        script = ("import subprocess,sys,time;"
+                  "subprocess.run([sys.executable,'-c','import time;time.sleep(1)']);"
+                  "time.sleep(0.5)")
+        with tempfile.TemporaryDirectory() as tmp:
+            record = launch_hidden.launch(
+                [sys.executable, "-c", script],
+                name="tree", log_dir=Path(tmp) / "logs", timeout_s=20,
+            )
+            self.assertTrue(record.get("windows_checked_tree"))
+            self.assertEqual(record.get("window_count"), 0)
+
+    def test_child_pids_returns_list(self):
+        from lstest.scripts import launch_hidden
+
+        self.assertIsInstance(launch_hidden._child_pids(0), list)
+
 
 if __name__ == "__main__":
     unittest.main()

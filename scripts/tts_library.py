@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import os
 import subprocess
 import tempfile
 from contextlib import contextmanager
@@ -67,6 +68,11 @@ class UsageError(LibraryError):
 
 # --------------------------------------------------------------------- 规格构造
 
+
+
+def _no_window_flags() -> int:
+    """Windows 下禁止子进程创建控制台窗口。"""
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if os.name == "nt" else 0
 
 def _require_non_empty(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
@@ -233,7 +239,8 @@ def _default_runner(argv: Sequence[str]) -> Any:
     """默认 runner：调用 asset-tools；PATH 由 subprocess 自行解析。"""
 
     return subprocess.run(
-        list(argv), capture_output=True, text=True, check=False, timeout=DEFAULT_TIMEOUT_S
+        list(argv), capture_output=True, text=True, check=False, timeout=DEFAULT_TIMEOUT_S,
+        stdin=subprocess.DEVNULL, creationflags=_no_window_flags(),
     )
 
 

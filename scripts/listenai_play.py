@@ -207,6 +207,13 @@ def resolve_platform(requested: str) -> str:
     return requested
 
 
+def _no_window_flags() -> int:
+    """Windows 下禁止子进程创建控制台窗口，避免桌面闪终端。"""
+    if os.name != "nt":
+        return 0
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
 def run_command(command: List[str], *, text: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         command,
@@ -215,6 +222,8 @@ def run_command(command: List[str], *, text: bool = True) -> subprocess.Complete
         encoding="utf-8" if text else None,
         errors="replace" if text else None,
         check=False,
+        stdin=subprocess.DEVNULL,
+        creationflags=_no_window_flags(),
     )
 
 
