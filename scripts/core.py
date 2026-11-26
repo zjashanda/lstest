@@ -398,16 +398,21 @@ class TaskArtifacts:
         # 2.6.0 起统一 v4：structured_events 只保留事件包写入能力，不再改变目录布局
         self.layout = layout or result_layout.LAYOUT_V4
         if self.layout == result_layout.LAYOUT_V4:
-            root = Path(result_root)
-            root.mkdir(parents=True, exist_ok=True)
-            stamp = now_dt().strftime("%Y%m%d%H%M")
-            candidate = root / stamp
-            suffix = 2
-            while candidate.exists():
-                candidate = root / f"{stamp}-{suffix:02d}"
-                suffix += 1
-            self.run_dir = candidate
-            self.run_dir.mkdir(parents=True, exist_ok=True)
+            shared_dir = os.environ.get("LSTEST_RUN_DIR", "").strip()
+            if shared_dir:
+                self.run_dir = Path(shared_dir)
+                self.run_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                root = Path(result_root)
+                root.mkdir(parents=True, exist_ok=True)
+                stamp = now_dt().strftime("%Y%m%d%H%M")
+                candidate = root / stamp
+                suffix = 2
+                while candidate.exists():
+                    candidate = root / f"{stamp}-{suffix:02d}"
+                    suffix += 1
+                self.run_dir = candidate
+                self.run_dir.mkdir(parents=True, exist_ok=True)
         elif run_name:
             self.run_dir = Path(result_root) / run_name
             self.run_dir.mkdir(parents=True, exist_ok=True)

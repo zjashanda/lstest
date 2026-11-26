@@ -113,17 +113,41 @@ def post_milestone(issue: str, text: str, multica: str | None) -> bool:
         return False
 
 
+RUN_DIR_ENV = "LSTEST_RUN_DIR"
+
+
+def task_run_dir(work_dir: Path, name: str, reuse: str | None = None) -> Path:
+    """一次任务一个结果目录；显式 reuse 时复用，否则按分钟时间戳新建。"""
+    if reuse:
+        path = Path(reuse)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    base = work_dir.parent / "result" if work_dir.name == "work" else work_dir / "result"
+    base.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d%H%M", time.localtime())
+    candidate = base / stamp
+    suffix = 2
+    while candidate.exists():
+        candidate = base / f"{stamp}-{suffix:02d}"
+        suffix += 1
+    candidate.mkdir(parents=True)
+    return candidate
+
+
 def run_round(command: Sequence[str], index: int, work_dir: Path, name: str,
-              timeout_s: float) -> tuple[int, Path]:
+              timeout_s: float, run_dir: Path | None = None) -> tuple[int, Path]:
     """执行一轮；返回 (exit_code, 该轮日志路径)。"""
     log = round_log_path(work_dir, name, index)
     log.parent.mkdir(parents=True, exist_ok=True)
     rendered = [str(part).replace("{round}", str(index)).replace("{name}", name) for part in command]
+    env = None
+    if run_dir is not None:
+        env = {**os.environ, RUN_DIR_ENV: str(run_dir)}
     with log.open("wb") as handle:
         try:
             proc = subprocess.run(
                 rendered, stdout=handle, stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL, timeout=timeout_s or None,
+                stdin=subprocess.DEVNULL, timeout=timeout_s or None, env=env,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
             )
             return proc.returncode, log
@@ -160,8 +184,10 @@ def run_loop(
     interval_s: float,
     issue: str,
     multica: str | None,
+    run_dir: Path | None = None,
 ) -> int:
     work_dir.mkdir(parents=True, exist_ok=True)
+    task_dir = task_run_dir(work_dir, name, str(run_dir) if run_dir else None)
     state_file = state_path(work_dir, name)
     stop_file = stop_path(work_dir, name)
     mile_file = milestones_path(work_dir, name)
@@ -190,6 +216,7 @@ def run_loop(
         "next_milestone": max(milestone_every, ((start - 1) // milestone_every + 1) * milestone_every),
         "pid": os.getpid(),
         "work_dir": str(work_dir),
+        "run_dir": str(task_dir),
     }
     write_state(state_file, state)
 
@@ -216,7 +243,7 @@ def run_loop(
             state["last_error"] = f"磁盘剩余 {free:.1f}GB 低于门限 {min_free_gb}GB"
             break
 
-        rc, _log = run_round(command, index, work_dir, name, round_timeout_s)
+        rc, _log = run_round(command, index, work_dir, name, round_timeout_s, task_dir)
         state["completed"] = index
         state["last_exit"] = rc
         state["updated_at"] = now_text()
@@ -291,6 +318,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     start.add_argument("--interval", default="0s", help="轮次间隔，如 60s")
     start.add_argument("--issue", default="", help="里程碑上报的 Multica Issue")
     start.add_argument("--multica", default="", help="multica 可执行文件路径")
+    start.add_argument("--run-dir", default="",
+                       help="复用指定结果目录（续跑同一任务）；默认按时间戳新建")
     start.add_argument("--detach", action="store_true",
                        help="立即返回，引擎在后台隐藏运行（长任务必须用）")
     start.add_argument("cmd", nargs=argparse.REMAINDER)
@@ -343,6 +372,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         interval_s=interval_s,
         issue=args.issue,
         multica=args.multica,
+        run_dir=Path(args.run_dir) if args.run_dir else None,
     )
 
 
