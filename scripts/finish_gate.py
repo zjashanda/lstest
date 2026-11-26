@@ -186,6 +186,37 @@ def check_longrun(gate: Gate, task_dir: Path) -> None:
                       "目标次数未跑满，不得报完成")
 
 
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    if not path.is_file():
+        return ""
+    digest = hashlib.sha256()
+    digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def require_pass(run_dir: Path) -> list[str]:
+    """上传证据前的强校验：gate.json 必须存在且 ok=true，且与当前 tool.log 一致。"""
+    problems: list[str] = []
+    gate = run_dir / "gate.json"
+    if not gate.is_file():
+        return ["缺少 gate.json：上传前必须运行 finish_gate --write"]
+    try:
+        payload = json.loads(gate.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ["gate.json 不是合法 JSON"]
+    if not payload.get("ok"):
+        codes = ", ".join(item.get("code", "?") for item in payload.get("errors") or [])
+        problems.append(f"gate 未通过（{codes}），不得上传证据")
+    expected = payload.get("tool_log_sha256") or ""
+    actual = _sha256(run_dir / "tool.log")
+    if expected and actual and expected != actual:
+        problems.append("tool.log 在门禁通过后被修改，必须重跑门禁")
+    return problems
+
+
+
 def run_gate(task_dir: Path, run_dir: Path | None = None, repo_root: Path | None = None) -> dict[str, Any]:
     gate = Gate()
     repo = repo_root or Path(__file__).resolve().parent.parent.parent
@@ -217,11 +248,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--run", default="", help="指定运行目录名；默认取最新")
     parser.add_argument("--repo-root", default="")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--write", action="store_true",
+                        help="把结果写入运行目录 gate.json（上传证据时必须带）")
     args = parser.parse_args(argv)
 
     task_dir = Path(args.task_dir)
     run_dir = task_dir / "result" / args.run if args.run else None
     report = run_gate(task_dir, run_dir, Path(args.repo_root) if args.repo_root else None)
+
+    if args.write and report.get("run_dir"):
+        run_dir = Path(report["run_dir"])
+        payload = {
+            "schema": "lstest.gate.v1",
+            "ok": report["ok"],
+            "checked_at": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "errors": report["errors"],
+            "warnings": report["warnings"],
+            "tool_log_sha256": _sha256(run_dir / "tool.log"),
+        }
+        (run_dir / "gate.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"gate.json -> {run_dir / 'gate.json'}（ok={report['ok']}）")
 
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))

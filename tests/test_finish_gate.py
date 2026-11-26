@@ -102,5 +102,38 @@ class FinishGateTests(unittest.TestCase):
         self.assertIn("LONGRUN_SHORT", codes)
 
 
+class RequirePassTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.repo = self.root / "repo"
+        (self.repo / "lstest" / "markers").mkdir(parents=True)
+        (self.repo / "lstest" / "markers" / "catalog.json").write_text(
+            json.dumps({"markers": [{"code": "intent", "category": "wake", "desc": ""}]}),
+            encoding="utf-8")
+        self.task = build_task(self.root)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_missing_gate_json_blocks(self):
+        run = next((self.task / "result").glob("2026*"))
+        problems = finish_gate.require_pass(run)
+        self.assertTrue(any("缺少 gate.json" in p for p in problems), problems)
+
+    def test_passing_gate_allows_upload(self):
+        finish_gate.main(["--task-dir", str(self.task), "--repo-root", str(self.repo), "--write"])
+        run = next((self.task / "result").glob("2026*"))
+        self.assertEqual(finish_gate.require_pass(run), [])
+
+    def test_modified_tool_log_blocks(self):
+        finish_gate.main(["--task-dir", str(self.task), "--repo-root", str(self.repo), "--write"])
+        run = next((self.task / "result").glob("2026*"))
+        with (run / "tool.log").open("a", encoding="utf-8") as fh:
+            fh.write("2026-11-25 12:00:09,000 - INFO  - [TASK] tampered\n")
+        problems = finish_gate.require_pass(run)
+        self.assertTrue(any("被修改" in p for p in problems), problems)
+
+
 if __name__ == "__main__":
     unittest.main()
