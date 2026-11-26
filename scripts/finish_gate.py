@@ -217,6 +217,52 @@ def require_pass(run_dir: Path) -> list[str]:
 
 
 
+CONTINUOUS_HINTS = ("monitor", "ota", "continuous", "soak", "long_run", "longrun")
+
+
+def _is_continuous(task_dir: Path, run_dir: Path | None) -> bool:
+    work = task_dir / "work"
+    if (work / "cumulative.json").is_file():
+        return True
+    if run_dir is not None:
+        manifest = run_dir / "task.json"
+        if manifest.is_file():
+            try:
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                payload = {}
+            blob = json.dumps(payload, ensure_ascii=False).lower()
+            if any(hint in blob for hint in CONTINUOUS_HINTS):
+                return True
+    return False
+
+
+def check_continuous(gate: "Gate", task_dir: Path, run_dir: Path | None) -> None:
+    """持续任务必须承接历史累计，不得清零。"""
+    if run_dir is None or not _is_continuous(task_dir, run_dir):
+        return
+    work = task_dir / "work"
+    ledger_path = work / "cumulative.json"
+    if not ledger_path.is_file():
+        gate.error("NO_CUMULATIVE_LEDGER",
+                   "持续任务缺少 work/cumulative.json（历史统计会清零）",
+                   "窗口结束必须 merge 到 cumulative.json")
+        return
+    try:
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        gate.error("BAD_CUMULATIVE_LEDGER", "cumulative.json 不是合法 JSON", "重新生成")
+        return
+    if int(ledger.get("windows") or 0) < 1:
+        gate.error("EMPTY_CUMULATIVE_LEDGER", "cumulative.json 没有任何窗口记录", "先并入历史窗口")
+    tool = run_dir / "tool.log"
+    if tool.is_file():
+        text = tool.read_text(encoding="utf-8", errors="replace")
+        if "累计" not in text:
+            gate.error("NO_CUMULATIVE_LINE", "tool.log 里没有累计行（无法证明承接历史）",
+                       "收尾调用 cumulative.render_line 写入 [TASK] 累计 …")
+
+
 def run_gate(task_dir: Path, run_dir: Path | None = None, repo_root: Path | None = None) -> dict[str, Any]:
     gate = Gate()
     repo = repo_root or Path(__file__).resolve().parent.parent.parent
@@ -233,6 +279,7 @@ def run_gate(task_dir: Path, run_dir: Path | None = None, repo_root: Path | None
         check_cases_results(gate, target)
         check_serial(gate, target)
     check_longrun(gate, task_dir)
+    check_continuous(gate, task_dir, target)
     return {
         "task_dir": str(task_dir),
         "run_dir": str(target) if target else None,
