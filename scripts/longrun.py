@@ -131,6 +131,20 @@ def run_round(command: Sequence[str], index: int, work_dir: Path, name: str,
             return 124, log
 
 
+def spawn_detached(argv: Sequence[str], work_dir: Path, name: str) -> dict[str, Any]:
+    """用 launch_hidden 把引擎自己放到后台，立即返回。"""
+    from . import launch_hidden
+
+    py = sys.executable
+    cmd = [py, "-m", "lstest.scripts.longrun", *argv]
+    record = launch_hidden.launch(
+        cmd, name=f"longrun_{name}", log_dir=work_dir / "logs",
+        cwd=Path(__file__).resolve().parent.parent.parent, detach=True,
+    )
+    return {"name": name, "detached": True, "pid": record.get("pid"),
+            "log": record.get("stdout")}
+
+
 def run_loop(
     *,
     name: str,
@@ -277,6 +291,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     start.add_argument("--interval", default="0s", help="轮次间隔，如 60s")
     start.add_argument("--issue", default="", help="里程碑上报的 Multica Issue")
     start.add_argument("--multica", default="", help="multica 可执行文件路径")
+    start.add_argument("--detach", action="store_true",
+                       help="立即返回，引擎在后台隐藏运行（长任务必须用）")
     start.add_argument("cmd", nargs=argparse.REMAINDER)
 
     status = sub.add_parser("status", help="查看状态")
@@ -306,6 +322,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 2
+
+    if args.detach:
+        forwarded = [a for a in (argv if argv is not None else sys.argv[1:]) if a != "--detach"]
+        record = spawn_detached(forwarded, Path(args.work_dir), args.name)
+        print(json.dumps(record, ensure_ascii=False))
+        return 0
 
     return run_loop(
         name=args.name,
