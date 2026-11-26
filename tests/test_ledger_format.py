@@ -179,6 +179,16 @@ class LedgerFormatTests(unittest.TestCase):
             errors = ToolLogValidator().validate_run(run)
             self.assertTrue(any("不一致" in e for e in errors), errors)
 
+    def test_marker_with_display_fields_keeps_code_first(self):
+        from lstest.scripts import markers as mk
+
+        hit = mk.MarkerHit(code="wakeup", device="ap", port="COM6", value="x",
+                           extra={"keyword": "tian mao", "intentStr": "tian mao"})
+        line = hit.text()
+        self.assertTrue(line.startswith("wakeup: "), line)
+        self.assertIn("keyword=tian mao", line)
+        self.assertNotIn("keyword:", line)
+
 
 class MarkerPolicyTests(unittest.TestCase):
     def _extract(self, policy_map):

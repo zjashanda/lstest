@@ -51,9 +51,10 @@ class MarkerHit:
     extra: dict[str, str] = field(default_factory=dict)
 
     def text(self) -> str:
-        """标记正文（不含时间戳前缀），供 core.emit_markers 包装成流水账行。"""
+        """标记正文（不含时间戳前缀）。code 永远在最前，display 字段以 k=v 跟在后面。"""
         if self.extra:
-            return "; ".join(f"{key}: {value}" for key, value in self.extra.items())
+            body = ", ".join(f"{key}={value}" for key, value in self.extra.items())
+            return f"{self.code}: {body}"
         return f"{self.code}: {self.value}".rstrip(": ")
 
     def lines(self) -> list[str]:
