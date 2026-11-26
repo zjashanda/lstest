@@ -263,6 +263,42 @@ def check_continuous(gate: "Gate", task_dir: Path, run_dir: Path | None) -> None
                        "收尾调用 cumulative.render_line 写入 [TASK] 累计 …")
 
 
+def check_profile_regression(gate: "Gate", task_dir: Path) -> None:
+    """profile 规则数不得比上次记录少：防整体覆盖导致可用正则丢失。"""
+    marker = task_dir / "work" / "profile_rule_count.json"
+    candidates = list((task_dir / "assets").glob("profile*.json")) + \
+                 list((task_dir / "work" / "profiles").glob("*.json")) + \
+                 list((task_dir / "lstest" / "profiles").rglob("profile.json"))
+    if not candidates:
+        return
+    counts: dict[str, int] = {}
+    previous: dict[str, int] = {}
+    if marker.is_file():
+        try:
+            previous = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            previous = {}
+    for path in candidates:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            gate.error("BAD_PROFILE", f"{path.name} 不是合法 JSON", "修好后再收尾")
+            continue
+        rules = payload.get("event_rules") or []
+        key = str(path.relative_to(task_dir).as_posix())
+        counts[key] = len(rules)
+        if key in previous and len(rules) < int(previous[key]):
+            gate.error("PROFILE_RULES_SHRANK",
+                       f"{key} 规则数 {previous[key]} -> {len(rules)}（疑似被整体覆盖）",
+                       "用 profile_merge 合并，禁止整体重写")
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        merged = {**previous, **counts}
+        marker.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def run_gate(task_dir: Path, run_dir: Path | None = None, repo_root: Path | None = None) -> dict[str, Any]:
     gate = Gate()
     repo = repo_root or Path(__file__).resolve().parent.parent.parent
@@ -280,6 +316,7 @@ def run_gate(task_dir: Path, run_dir: Path | None = None, repo_root: Path | None
         check_serial(gate, target)
     check_longrun(gate, task_dir)
     check_continuous(gate, task_dir, target)
+    check_profile_regression(gate, task_dir)
     return {
         "task_dir": str(task_dir),
         "run_dir": str(target) if target else None,
