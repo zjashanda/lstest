@@ -258,13 +258,29 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.write and report.get("run_dir"):
         run_dir = Path(report["run_dir"])
+        artifacts = []
+        for item in sorted(run_dir.rglob("*")):
+            if not item.is_file() or item.name == "gate.json":
+                continue
+            artifacts.append({
+                "path": item.relative_to(run_dir).as_posix(),
+                "bytes": item.stat().st_size,
+                "sha256": _sha256(item),
+            })
+        artifact_block = json.dumps(artifacts, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        import hashlib as _hashlib
+
         payload = {
             "schema": "lstest.gate.v1",
             "ok": report["ok"],
+            "task_id": run_dir.parent.parent.name,
+            "run": run_dir.name,
             "checked_at": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "errors": report["errors"],
             "warnings": report["warnings"],
             "tool_log_sha256": _sha256(run_dir / "tool.log"),
+            "artifacts": artifacts,
+            "manifest_sha256": _hashlib.sha256(artifact_block).hexdigest(),
         }
         (run_dir / "gate.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
