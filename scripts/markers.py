@@ -29,6 +29,13 @@ class MarkerSpec:
     desc: str
     display: tuple[str, ...] = ()
     log_policy: str = "always"   # always | change | summary
+    aliases: tuple[str, ...] = ()
+    value_semantics: str = ""
+    sample: str = ""
+
+
+class MarkerContractError(ValueError):
+    """码表/项目标记契约不满足；上层应据此报 BLOCKED_PROFILE_CONTRACT。"""
 
 
 @dataclass
@@ -40,6 +47,8 @@ class MarkerRule:
     capture: str | None
     display: tuple[str, ...]
     stage: str | None = None
+    custom: bool = False
+    note: str = ""
 
 
 @dataclass
@@ -80,6 +89,9 @@ def load_catalog(path: Path | str) -> dict[str, MarkerSpec]:
             desc=str(item.get("desc") or ""),
             display=tuple(item.get("display") or ()),
             log_policy=str(item.get("log_policy") or "always"),
+            aliases=tuple(str(alias) for alias in (item.get("aliases") or ()) if str(alias).strip()),
+            value_semantics=str(item.get("value_semantics") or ""),
+            sample=str(item.get("sample") or ""),
         )
     return specs
 
@@ -105,8 +117,44 @@ def load_profile_capabilities(profile_path: Path | str) -> dict[str, Any]:
     return dict(declared) if isinstance(declared, Mapping) else {}
 
 
+REQUIRED_CUSTOM_FIELDS = ("desc", "value_semantics", "sample")
+
+
+def load_custom_defs(profile_path: Path | str) -> dict[str, dict[str, Any]]:
+    """项目自定义 code 的定义（profile 顶层 custom_codes，按 code 索引）。"""
+    try:
+        payload = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    raw = payload.get("custom_codes")
+    if isinstance(raw, Mapping):
+        items = [dict(value, code=key) if isinstance(value, Mapping) else {} for key, value in raw.items()]
+    elif isinstance(raw, list):
+        items = [dict(value) for value in raw if isinstance(value, Mapping)]
+    else:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for item in items:
+        code = str(item.get("code") or "").strip()
+        if code:
+            out[code] = item
+    return out
+
+
+def validate_custom_codes(custom_defs: Mapping[str, Mapping[str, Any]]) -> None:
+    """自定义 code 必须有定义：表示什么、值域含义、真实日志样例。"""
+    problems: list[str] = []
+    for code, item in sorted(custom_defs.items()):
+        missing = [field for field in REQUIRED_CUSTOM_FIELDS if not str(item.get(field) or "").strip()]
+        if missing:
+            problems.append(f"{code} 缺 {', '.join(missing)}")
+    if problems:
+        raise MarkerContractError("BLOCKED_PROFILE_CONTRACT 自定义 code 定义不完整: " + "; ".join(problems))
+
+
 def load_rules(profile_path: Path | str, catalog: Mapping[str, MarkerSpec] | None = None) -> list[MarkerRule]:
     payload = json.loads(Path(profile_path).read_text(encoding="utf-8"))
+    custom_defs = load_custom_defs(profile_path)
     rules: list[MarkerRule] = []
     for item in payload.get("event_rules") or []:
         rule_id = str(item.get("rule_id") or "").strip()
@@ -116,8 +164,7 @@ def load_rules(profile_path: Path | str, catalog: Mapping[str, MarkerSpec] | Non
         code = str(item.get("code") or "").strip()
         if not code:
             code = rule_id
-        if catalog is not None and code not in catalog:
-            code = rule_id
+        is_custom = catalog is not None and code not in catalog
         display = tuple(item.get("display_captures") or ())
         capture = item.get("presentation_capture")
         try:
@@ -132,8 +179,29 @@ def load_rules(profile_path: Path | str, catalog: Mapping[str, MarkerSpec] | Non
             capture=str(capture) if capture else None,
             display=display,
             stage=item.get("stage"),
+            custom=is_custom,
+            note=str(item.get("project_note") or ""),
         ))
+    if catalog is not None:
+        declared = {rule.code: custom_defs.get(rule.code, {}) for rule in rules if rule.custom}
+        inline = {
+            rule.code: dict(custom_defs.get(rule.code, {}), **{
+                key: item
+                for key in REQUIRED_CUSTOM_FIELDS
+                if (item := _rule_field(payload, rule.rule_id, key))
+            })
+            for rule in rules if rule.custom
+        }
+        merged = {code: dict(declared.get(code, {}), **inline.get(code, {})) for code in set(declared) | set(inline)}
+        validate_custom_codes(merged)
     return rules
+
+
+def _rule_field(payload: Mapping[str, Any], rule_id: str, key: str) -> Any:
+    for item in payload.get("event_rules") or []:
+        if isinstance(item, Mapping) and str(item.get("rule_id") or "").strip() == rule_id:
+            return item.get(key)
+    return None
 
 
 class MarkerExtractor:
@@ -148,6 +216,21 @@ class MarkerExtractor:
         self.rules = list(rules)
         self.missing: set[tuple[str, str]] = set()
         self.capabilities: dict[str, Any] = {}
+        self.custom = sorted({rule.code for rule in self.rules if rule.custom})
+
+    def custom_report(self) -> list[dict[str, Any]]:
+        """项目自定义 code 清单，供上报知识库审核。"""
+        out: list[dict[str, Any]] = []
+        for rule in self.rules:
+            if not rule.custom:
+                continue
+            out.append({
+                "code": rule.code,
+                "rule_id": rule.rule_id,
+                "sources": list(rule.sources),
+                "note": rule.note,
+            })
+        return out
 
     @classmethod
     def from_paths(cls, catalog_path: Path | str, profile_path: Path | str) -> "MarkerExtractor":
@@ -168,11 +251,15 @@ class MarkerExtractor:
             spec = self.catalog.get(rule.code)
             display = rule.display or (spec.display if spec else ())
             extra = self._extra(display, value)
-            code = rule.code if rule.code in self.catalog else rule.code
-            hits.append(MarkerHit(code=code, device=role, port=port, value=value, extra=extra))
+            hits.append(MarkerHit(code=rule.code, device=role, port=port, value=value, extra=extra))
         return hits
 
     def report_missing(self, role: str) -> list[str]:
+        """码表有、但本项目未声明的 code。
+
+        仅作信息参考：设备固件是否输出某个标记由机型决定，
+        不构成缺漏，也不阻断运行。
+        """
         configured = {rule.code for rule in self.rules if not rule.sources or role in rule.sources}
         skip_categories = set(self.capabilities.get("markers_absent") or ())
         absent = [code for code in self.catalog if code not in configured

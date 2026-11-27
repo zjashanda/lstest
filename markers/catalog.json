@@ -1,7 +1,7 @@
 {
   "schema": "lstest.marker-catalog.v1",
   "version": "1.0.0",
-  "updated_at": "2026-11-25",
+  "updated_at": "2026-11-27",
   "note": "标记位字典：code 与项目无关，跨项目统一；正则由 profiles/<项目>/profile.json 的 event_rules 提供。",
   "line_format": "{indent}{device}({port}): {code}: {value}",
   "categories": [
@@ -62,13 +62,30 @@
       "display": [
         "keyword",
         "intentStr"
-      ]
+      ],
+      "aliases": [
+        "唤醒",
+        "唤醒事件",
+        "唤醒词",
+        "唤醒触发",
+        "wake word"
+      ],
+      "value_semantics": "唤醒事件 JSON，含 keyword / intentStr",
+      "sample": "{\"keyword\":\"小度小度\",\"intentStr\":\"wakeup\"}"
     },
     {
       "code": "intent",
       "category": "wake",
       "desc": "识别到的意图",
-      "display": []
+      "display": [],
+      "aliases": [
+        "意图",
+        "识别意图",
+        "命令词",
+        "命令意图"
+      ],
+      "value_semantics": "识别到的意图名，字符串",
+      "sample": "intent: open_curtain"
     },
     {
       "code": "wakeMode",
@@ -88,7 +105,15 @@
       "code": "asrResult",
       "category": "wake",
       "desc": "离线识别结果",
-      "display": []
+      "display": [],
+      "aliases": [
+        "识别结果",
+        "语音识别",
+        "ASR",
+        "识别文本"
+      ],
+      "value_semantics": "在线/离线识别返回的文本",
+      "sample": "asr result: 打开窗帘"
     },
     {
       "code": "asrOnline",
@@ -168,14 +193,30 @@
       "category": "media",
       "desc": "当前音量",
       "display": [],
-      "log_policy": "change"
+      "log_policy": "change",
+      "aliases": [
+        "当前音量",
+        "开机音量",
+        "音量值",
+        "current volume"
+      ],
+      "value_semantics": "开机时输出的当前音量，通常只出现一次",
+      "sample": "volume: 3"
     },
     {
       "code": "volumeSet",
       "category": "media",
       "desc": "音量变更",
       "display": [],
-      "log_policy": "change"
+      "log_policy": "change",
+      "aliases": [
+        "音量设置",
+        "播放器音量",
+        "设置音量",
+        "set volume"
+      ],
+      "value_semantics": "0-100，每条音量命令后输出，反映播放器实际写入值",
+      "sample": "mini player set vol : 100"
     },
     {
       "code": "audioSha256",
@@ -284,7 +325,15 @@
       "code": "bootReason",
       "category": "device",
       "desc": "启动原因",
-      "display": []
+      "display": [],
+      "aliases": [
+        "启动原因",
+        "开机原因",
+        "复位原因",
+        "boot reason"
+      ],
+      "value_semantics": "启动/复位原因码",
+      "sample": "Boot Reason: CRASH 0x30"
     },
     {
       "code": "bootloader",
@@ -309,7 +358,18 @@
       "category": "device",
       "desc": "内存水位",
       "display": [],
-      "log_policy": "summary"
+      "log_policy": "summary",
+      "aliases": [
+        "内存",
+        "剩余内存",
+        "内存水位",
+        "内存占用",
+        "memory",
+        "psram",
+        "sram"
+      ],
+      "value_semantics": "psram / sram 剩余字节数，整轮汇总一条",
+      "sample": "psram heap free 123456, sram heap: 7890"
     },
     {
       "code": "reset",
@@ -436,7 +496,15 @@
       "category": "fault",
       "desc": "看门狗复位",
       "display": [],
-      "log_policy": "summary"
+      "log_policy": "summary",
+      "aliases": [
+        "看门狗",
+        "看门狗复位",
+        "wdg",
+        "watchdog reset"
+      ],
+      "value_semantics": "看门狗复位事件，summary 输出",
+      "sample": "watchdog reset"
     },
     {
       "code": "unexpectedReboot",
@@ -541,7 +609,17 @@
       "category": "media",
       "desc": "音量档位配置(0-4)",
       "display": [],
-      "log_policy": "change"
+      "log_policy": "change",
+      "aliases": [
+        "音量档位",
+        "音量等级",
+        "音量级别",
+        "音量-btn",
+        "volume level",
+        "volLevel"
+      ],
+      "value_semantics": "整型 0-4；0 静音，4 最大档；边界提示音见 TONE_ID_5 / TONE_ID_4",
+      "sample": "refresh config volume=4"
     }
   ]
 }

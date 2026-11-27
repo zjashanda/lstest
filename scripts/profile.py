@@ -338,6 +338,7 @@ class DeviceProfile:
                 raise ProfileError(f"duplicate wake_word_id: {wake_word_id}")
             wake_word_ids.add(wake_word_id)
         cls._validate_marker_rules(payload)
+        cls._validate_custom_codes(payload)
         cls._validate_event_rules(payload)
         return cls(profile_id, schema_version, path, payload, sha256_file(path), MarkerGate())
 
@@ -351,6 +352,30 @@ class DeviceProfile:
         candidate.setdefault("schema", "lstest.state-extension.v1")
         candidate.setdefault("profile_id", self.profile_id)
         return state_catalog.validate_extension(candidate)
+
+    @staticmethod
+    def _validate_custom_codes(payload: Mapping[str, Any]) -> None:
+        """项目自定义 code 必须带定义，否则没人知道它表示什么状态或参数。"""
+        raw = payload.get("custom_codes")
+        if raw is None:
+            return
+        if isinstance(raw, Mapping):
+            items = [(str(key), value) for key, value in raw.items()]
+        elif isinstance(raw, list):
+            items = [(str(value.get("code") or ""), value) if isinstance(value, Mapping) else ("", value)
+                     for value in raw]
+        else:
+            raise ProfileError("custom_codes must be an object or a list")
+        required = ("desc", "value_semantics", "sample")
+        for code, item in items:
+            location = f"custom_codes[{code or '?'}]"
+            if not isinstance(item, Mapping):
+                raise ProfileError(f"{location} must be an object")
+            if not code.strip():
+                raise ProfileError(f"{location} requires code")
+            missing = [field for field in required if not str(item.get(field) or "").strip()]
+            if missing:
+                raise ProfileError(f"BLOCKED_PROFILE_CONTRACT {location} 缺 {', '.join(missing)}")
 
     @staticmethod
     def _validate_event_rules(payload: Mapping[str, Any]) -> None:
